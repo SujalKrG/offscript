@@ -9,3 +9,6 @@ spike-results/
 
 # local helper, not part of the repo
 push-to-github.ps1
+
+# Test coverage output
+coverage/

@@ -11,6 +11,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - CI workflow running tests and type checks on Linux and macOS.
 - Social preview image, `.gitattributes` and `.editorconfig`.
 
+- Industry-grade CI: Biome lint and format, strict types, tests on Linux, macOS and Windows with an 85% coverage gate, dependency audit, TruffleHog secret scan, `typos`, actionlint and zizmor on workflows, CodeQL for code and workflows, dependency review, OpenSSF Scorecard, Dependabot with a 7-day cooldown, and a single required `CI OK` check. Every action is pinned to a commit hash; every job has least-privilege permissions.
+- `bun run check` runs CI's required checks locally.
+
 ### Changed
 - Code is formatted and linted with Biome (`bun run lint`, `bun run format`).
 - Test fixture builds its fake API key at runtime, so no key-shaped text appears in the source.

@@ -1,0 +1,4 @@
+[test]
+# Coverage measures the product code, not the tests themselves.
+coverageSkipTestFiles = true
+# The coverage gate is overall, not per file: see scripts/coverage-gate.ts (CI requires 85% lines and functions).

@@ -20,9 +20,34 @@ Requirements: [Bun](https://bun.sh) 1.4+, git. Claude Code is optional (only the
 git clone https://github.com/SujalKrG/offscript.git
 cd offscript
 bun install
+bun run check      # everything CI's required checks run locally: lint + format, strict types, tests with coverage
+```
+
+Individually:
+
+```bash
 bun test           # unit + end-to-end tests on a throwaway repo and transcript
 bun run typecheck  # strict TypeScript
+bun run lint       # Biome: lint, formatting, import order (fails on any difference)
+bun run format     # fix formatting and safe lint issues in place
 ```
+
+### What CI checks
+
+Every pull request runs these. **CI OK** is the single required check; it passes only when all of the others do.
+
+| Check | What it enforces |
+|---|---|
+| Lint, format, types | Biome lint and formatting, strict TypeScript |
+| Test (Linux, macOS, Windows) | Full test suite on all three; Linux also enforces at least 85% line and function coverage |
+| Dependency audit | Lockfile in sync, no known vulnerability of moderate severity or above |
+| Secret scan | TruffleHog over the full history: no live or unverifiable credentials |
+| Spelling | `typos` over code and docs |
+| Workflow lint and security | actionlint (with shellcheck) and zizmor over `.github/` |
+| CodeQL | Static analysis of the TypeScript and of the workflows |
+| Dependency review | No new dependency with a known vulnerability or a copyleft license |
+
+A non-blocking job also runs the tests on the latest Bun release, to catch breakage early. OpenSSF Scorecard runs weekly.
 
 Run the spike against a repo of yours:
 
@@ -78,7 +103,7 @@ Real cases are gold, but they contain your code and prompts. Before sharing:
 ## Pull requests
 
 - One topic per PR. Small is better.
-- Add or update tests. `bun test` and `bun run typecheck` must pass.
+- Add or update tests. `bun run check` must pass.
 - Use [Conventional Commits](https://www.conventionalcommits.org/) for titles: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
 - Update `CHANGELOG.md` under **Unreleased** for user-visible changes.
 - If you change a verdict rule, include a before/after example in the PR description.
