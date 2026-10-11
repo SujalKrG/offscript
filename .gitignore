@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Spike output contains excerpts of your private sessions. Never commit it.
+spike-results/
+.offscript/

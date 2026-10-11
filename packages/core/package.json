@@ -1,0 +1,8 @@
+{
+  "name": "@offscript/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Core pipeline for offscript: ingest agent sessions, extract intents and facts, trace changed lines to prompts."
+}
