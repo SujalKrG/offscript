@@ -24,6 +24,8 @@ export interface FileEdit {
   removedLines: string[]; // lines this edit removed
   kind: "create" | "update";
   failed: boolean;
+  timestamp?: string; // when the tool call was made
+  subagent?: string; // set when a subagent (Task tool) made the edit
 }
 
 export interface ShellRun {
@@ -33,6 +35,8 @@ export interface ShellRun {
   command: string; // redacted
   isTest: boolean;
   failed: boolean | null; // null when no result was recorded
+  timestamp?: string;
+  subagent?: string;
 }
 
 export interface Session {
@@ -51,6 +55,18 @@ export interface Session {
   compactions: number;
   unknownRecordTypes: Record<string, number>;
   redactions: number;
+  subagentFiles: number; // subagent transcripts merged into this session
+  /**
+   * What changed in each tracked file between two of Claude Code's own backups
+   * (~/.claude/file-history). Covers changes made any way during a turn: edit tools,
+   * scripts run through Bash, subagents. Kept apart from `edits` because the exact
+   * moment inside the turn is unknown.
+   */
+  turnDeltas: FileEdit[];
+  backupFiles: number; // tracked files with at least two backups found on disk
+  /** Each tracked file as it was before this session first touched it (Claude Code's first backup). */
+  baselines: { filePath: string; backupPath: string | null }[]; // backupPath null: the file did not exist yet
+  backupLinesUnexplained: number; // lines that changed between backups while the agent could not have written them
 }
 
 export interface DiffHunkLine {

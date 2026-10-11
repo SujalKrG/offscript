@@ -20,7 +20,7 @@ export interface Fixture {
 let uuidN = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++uuidN).padStart(12, "0")}`;
 
-export function buildFixture(): Fixture {
+export function buildFixture(opts: { subagent?: boolean; backups?: boolean } = {}): Fixture {
   const base = mkdtempSync(join(tmpdir(), "offscript-fixture-"));
   const repo = join(base, "shop");
   const projects = join(base, "claude", "projects");
@@ -46,7 +46,11 @@ export function buildFixture(): Fixture {
     join(repo, "src", "cart.ts"),
     "export function total(items: number[], discount = 0) {\n  const sum = items.reduce((a, b) => a + b, 0);\n  return sum - discount;\n}\n",
   );
-  writeFileSync(join(repo, "src", "coupon.ts"), "export function applyCoupon(code: string) {\n  return code === 'SAVE10' ? 10 : 0;\n}\n");
+  // coupon.ts: written by the agent, then one line added by hand (not in the transcript)
+  writeFileSync(
+    join(repo, "src", "coupon.ts"),
+    "export function applyCoupon(code: string) {\n  return code === 'SAVE10' ? 10 : 0;\n}\nexport const COUPON_NOTE = 'added by a human';\n",
+  );
   writeFileSync(join(repo, "src", "auth", "session.ts"), "export const TTL = 86400;\n");
   writeFileSync(
     join(repo, "tests", "cart.test.ts"),
@@ -123,7 +127,38 @@ export function buildFixture(): Fixture {
       originalFile: null,
     },
   );
-  tool("t3", "Bash", { command: "npm test" }, { stdout: "1 failed", stderr: "" }, true);
+  if (opts.backups) {
+    // Claude Code backs up coupon.ts (it did not exist yet) before the agent's first edit to it...
+    recs.push({
+      type: "file-history-delta",
+      messageId: uuid(),
+      trackingPath: "src/coupon.ts",
+      backup: { backupFileName: null, version: 1, backupTime: ts(), realParentDir: join(repo, "src") },
+      timestamp: ts(),
+    });
+  }
+  // ...then the agent appends a line with a script, which no edit tool records.
+  tool("t3", "Bash", { command: opts.backups ? "python add_note.py && npm test" : "npm test" }, { stdout: "1 failed", stderr: "" }, true);
+  if (opts.backups) {
+    // At the next prompt, Claude Code backs up the file again: v2 holds the script's line too.
+    const at = ts();
+    recs.push({
+      type: "file-history-snapshot",
+      messageId: uuid(),
+      snapshot: {
+        messageId: "m",
+        timestamp: at,
+        trackedFileBackups: { "src/coupon.ts": { backupFileName: "c0ffee0000000001@v2", version: 2, backupTime: at, realParentDir: join(repo, "src") } },
+      },
+      isSnapshotUpdate: false,
+    });
+    const fh = join(base, "claude", "file-history", sessionId);
+    mkdirSync(fh, { recursive: true });
+    writeFileSync(
+      join(fh, "c0ffee0000000001@v2"),
+      "export function applyCoupon(code: string) {\n  return code === 'SAVE10' ? 10 : 0;\n}\nexport const COUPON_NOTE = 'added by a human';\n",
+    );
+  }
   user("tests are failing, fix them");
   tool(
     "t4",
@@ -157,23 +192,100 @@ export function buildFixture(): Fixture {
 
   const transcript = join(dir, `${sessionId}.jsonl`);
   writeFileSync(transcript, `${recs.map((r) => JSON.stringify(r)).join("\n")}\n`);
+
+  if (opts.subagent) {
+    // A Task-tool subagent, stored beside the main transcript, adds the COUPON_NOTE line.
+    const subDir = join(dir, sessionId, "subagents");
+    mkdirSync(subDir, { recursive: true });
+    const at = new Date(now - 60_000 + 12_500).toISOString(); // after prompt 2, before the last test run
+    const sub = [
+      {
+        sessionId,
+        cwd: repo,
+        isSidechain: true,
+        type: "user",
+        uuid: uuid(),
+        timestamp: at,
+        message: { role: "user", content: "Add a note constant to coupon.ts" },
+      },
+      {
+        sessionId,
+        cwd: repo,
+        isSidechain: true,
+        type: "assistant",
+        uuid: uuid(),
+        timestamp: at,
+        message: { role: "assistant", content: [{ type: "tool_use", id: "s1", name: "Edit", input: { file_path: join(repo, "src", "coupon.ts") } }] },
+      },
+      {
+        sessionId,
+        cwd: repo,
+        isSidechain: true,
+        type: "user",
+        uuid: uuid(),
+        timestamp: at,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "s1", content: "ok" }] },
+        toolUseResult: {
+          filePath: join(repo, "src", "coupon.ts"),
+          structuredPatch: [{ oldStart: 4, oldLines: 0, newStart: 4, newLines: 1, lines: ["+export const COUPON_NOTE = 'added by a human';"] }],
+        },
+      },
+    ];
+    writeFileSync(join(subDir, "agent-a1b2c3.jsonl"), `${sub.map((r) => JSON.stringify(r)).join("\n")}\n`);
+  }
   return { repo, projects, transcript, sessionId };
 }
 
-/** A fake `claude` binary that returns a canned intent ledger and records its args. */
+/**
+ * A fake `claude` CLI that returns a canned intent ledger and records its args and stdin.
+ * The logic is a Bun script; the launcher is a .cmd on Windows (run through cmd.exe, like the real
+ * npm-installed `claude.cmd`) and a shell script elsewhere, so the test runs on every OS.
+ */
 export function fakeClaude(dir: string): string {
-  const bin = join(dir, "fake-claude.sh");
+  const envelope = {
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    total_cost_usd: 0.0012,
+    result: `\`\`\`json\n${JSON.stringify({
+      intents: [
+        {
+          id: "I1",
+          text: "Add a discount parameter to total()",
+          kind: "task",
+          sourcePrompts: [1],
+          quote: "Add a discount parameter",
+          status: "active",
+          supersededBy: null,
+        },
+        { id: "I2", text: "Do not touch auth", kind: "constraint", sourcePrompts: [1], quote: "Don't touch auth", status: "active", supersededBy: null },
+      ],
+      claims: [{ text: "All tests pass", type: "tests_pass" }],
+      confidence: "high",
+      notes: "",
+    })}\n\`\`\``,
+  };
+  const script = join(dir, "fake-claude.ts");
   writeFileSync(
-    bin,
-    `#!/usr/bin/env bash
-if [ "$1" = "--version" ]; then echo "2.1.300 (Claude Code)"; exit 0; fi
-echo "$@" > "${join(dir, "args.txt")}"
-cat > "${join(dir, "stdin.txt")}"
-cat <<'EOF'
-{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0012,"result":"\`\`\`json\\n{\\"intents\\":[{\\"id\\":\\"I1\\",\\"text\\":\\"Add a discount parameter to total()\\",\\"kind\\":\\"task\\",\\"sourcePrompts\\":[1],\\"quote\\":\\"Add a discount parameter\\",\\"status\\":\\"active\\",\\"supersededBy\\":null},{\\"id\\":\\"I2\\",\\"text\\":\\"Do not touch auth\\",\\"kind\\":\\"constraint\\",\\"sourcePrompts\\":[1],\\"quote\\":\\"Don't touch auth\\",\\"status\\":\\"active\\",\\"supersededBy\\":null}],\\"claims\\":[{\\"text\\":\\"All tests pass\\",\\"type\\":\\"tests_pass\\"}],\\"confidence\\":\\"high\\",\\"notes\\":\\"\\"}\\n\`\`\`"}
-EOF
+    script,
+    `import { writeFileSync } from "node:fs";
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  console.log("2.1.300 (Claude Code)");
+  process.exit(0);
+}
+writeFileSync(${JSON.stringify(join(dir, "args.txt"))}, args.join(" "));
+writeFileSync(${JSON.stringify(join(dir, "stdin.txt"))}, await Bun.stdin.text());
+console.log(${JSON.stringify(JSON.stringify(envelope))});
 `,
   );
-  chmodSync(bin, 0o755);
-  return bin;
+  if (process.platform === "win32") {
+    const cmd = join(dir, "fake-claude.cmd");
+    writeFileSync(cmd, `@"${process.execPath}" "${script}" %*\r\n`);
+    return cmd;
+  }
+  const sh = join(dir, "fake-claude");
+  writeFileSync(sh, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+  chmodSync(sh, 0o755);
+  return sh;
 }

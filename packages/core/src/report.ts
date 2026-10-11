@@ -3,14 +3,13 @@
 import type { TestCheck } from "./checks.ts";
 import { type FileFlag, verdictForClaim } from "./checks.ts";
 import type { Facts } from "./facts.ts";
-import type { DiffRange } from "./git.ts";
 import type { Provenance } from "./provenance.ts";
 import type { IntentLedger, Session } from "./types.ts";
 
 export interface SessionReport {
   session: Session;
   repo: string;
-  range: DiffRange | null;
+  range: { label: string } | null;
   facts: Facts | null;
   provenance: Provenance | null;
   ledger: IntentLedger;
@@ -31,11 +30,11 @@ export function renderSession(r: SessionReport): string {
   L.push("");
   L.push(`- Repo: \`${r.repo}\`  Branch: \`${s.gitBranch ?? "?"}\`  Claude Code: ${s.cliVersion ?? "?"}`);
   L.push(
-    `- Prompts: ${s.prompts.length}  Edits: ${s.edits.length}  Shell commands: ${s.shell.length}  Compactions: ${s.compactions}  Secrets redacted: ${s.redactions}`,
+    `- Prompts: ${s.prompts.length}  Edits: ${s.edits.length}  Shell commands: ${s.shell.length}  Compactions: ${s.compactions}  Subagent transcripts: ${s.subagentFiles} (${s.edits.filter((e) => e.subagent).length} edits)  Files with Claude backups: ${s.backupFiles}  Secrets redacted: ${s.redactions}`,
   );
   const unknown = Object.entries(s.unknownRecordTypes);
   if (unknown.length) L.push(`- Unknown record types (parser warning): ${unknown.map(([k, v]) => `${k} x${v}`).join(", ")}`);
-  L.push(`- Change reviewed: ${r.range ? r.range.label : "no diff found for this session"}`);
+  L.push(`- Change reviewed: ${r.range ? r.range.label : "no commit or uncommitted change from this session found"}`);
   if (r.error) L.push(`- Error: ${r.error}`);
   L.push("");
 
@@ -109,7 +108,18 @@ export function renderSession(r: SessionReport): string {
     const p = r.provenance;
     L.push(`## 4. Which turn wrote what (provenance)`);
     L.push("");
-    L.push(`Traced **${p.attributedLines} of ${p.totalAddedLines}** added lines to an agent edit: **${pct(p.coverage)}**.`);
+    const own = p.totalAddedLines - p.otherSessionLines;
+    L.push(`Traced **${p.attributedLines} of ${own}** added lines to an edit in this session: **${pct(p.coverage)}**.`);
+    if (p.viaBackups) {
+      L.push(
+        `Of those, ${p.viaBackups} line(s) were found only through Claude Code's own file backups: written in this session, but not with an edit tool (for example a script run through Bash).`,
+      );
+    }
+    if (p.otherSessionLines) {
+      L.push(
+        `Another ${p.otherSessionLines} added line(s) in these files were written by other sessions (${p.otherSessions.map((x) => `\`${x.slice(0, 8)}\``).join(", ")}), so they are not counted for or against this one.`,
+      );
+    }
     if (p.editsOutsideRepo) L.push(`Edits outside this repo in the session: ${p.editsOutsideRepo}.`);
     if (p.agentFilesNotInDiff.length)
       L.push(
@@ -119,13 +129,13 @@ export function renderSession(r: SessionReport): string {
           .join(", ")}`,
       );
     L.push("");
-    L.push(`| file | status | +lines | traced | written in turn(s) | user named it | agent mentioned it | flags |`);
-    L.push(`|---|---|---|---|---|---|---|---|`);
+    L.push(`| file | status | +lines | traced | other sessions | written in turn(s) | user named it | agent mentioned it | flags |`);
+    L.push(`|---|---|---|---|---|---|---|---|---|`);
     const rows = [...p.files].sort((a, b) => (r.flags.get(b.path)?.length ?? 0) - (r.flags.get(a.path)?.length ?? 0));
     for (const f of rows.slice(0, 60)) {
       const flags = r.flags.get(f.path) ?? [];
       L.push(
-        `| \`${esc(f.path)}\` | ${f.status} | ${f.addedLines} | ${f.addedLines ? pct(f.attributedLines / f.addedLines) : "-"} | ${f.turns.join(", ") || "-"} | ${f.inPrompts ? "yes" : "no"} | ${f.inAgentText ? "yes" : "no"} | ${flags.map((x) => (x === "undisclosed" ? "**undisclosed**" : x)).join(", ")} |`,
+        `| \`${esc(f.path)}\` | ${f.status} | ${f.addedLines} | ${f.addedLines - f.otherSessionLines ? pct(f.attributedLines / (f.addedLines - f.otherSessionLines)) : "-"} | ${f.otherSessionLines || "-"} | ${f.turns.join(", ") || "-"} | ${f.inPrompts ? "yes" : "no"} | ${f.inAgentText ? "yes" : "no"} | ${flags.map((x) => (x === "undisclosed" ? "**undisclosed**" : x)).join(", ")} |`,
       );
     }
     if (rows.length > 60) L.push(`\n_${rows.length - 60} more files not shown._`);

@@ -1,7 +1,7 @@
 // Deterministic checks that combine the session with the diff.
 
 import type { Facts } from "./facts.ts";
-import { canonPath } from "./ingest/claude-code.ts";
+import { makeRelResolver } from "./git.ts";
 import type { Provenance } from "./provenance.ts";
 import type { Claim, Session } from "./types.ts";
 
@@ -14,9 +14,9 @@ export interface TestCheck {
   testRuns: number;
 }
 
-export function checkTests(session: Session, repoRoot: string): TestCheck {
-  const repoNorm = canonPath(repoRoot);
-  const repoEdits = session.edits.filter((e) => !e.failed && canonPath(e.filePath).startsWith(`${repoNorm}/`));
+export function checkTests(session: Session, repoRoot: string, roots: string[] = [repoRoot]): TestCheck {
+  const resolve = makeRelResolver(roots.length ? roots : [repoRoot]);
+  const repoEdits = session.edits.filter((e) => !e.failed && resolve(e.filePath) !== null);
   const lastEdit = repoEdits[repoEdits.length - 1];
   const tests = session.shell.filter((s) => s.isTest);
   const lastTest = tests[tests.length - 1];
