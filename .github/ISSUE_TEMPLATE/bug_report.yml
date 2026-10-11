@@ -1,0 +1,39 @@
+name: Bug report
+description: Something in offscript crashed or behaved wrongly.
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What went wrong
+      description: What you ran, what you expected, what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The exact command and the error. Redact paths and prompt text if needed.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options: [Windows, macOS, Linux, WSL]
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: "offscript commit abc1234, Bun 1.4.2, Claude Code 2.1.296, git 2.47"
+    validations:
+      required: true
+  - type: textarea
+    id: unknown
+    attributes:
+      label: Parser warnings
+      description: If the report lists "Unknown record types", paste that line here.

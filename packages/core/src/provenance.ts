@@ -2,7 +2,7 @@
 // and prompt) that wrote it. Lines no edit tool wrote are "unattributed": a human edit,
 // a shell-made edit (sed, codegen, formatter), or an edit from another session.
 
-import { normPath } from "./ingest/claude-code.ts";
+import { canonPath, normPath } from "./ingest/claude-code.ts";
 import type { DiffFile, FileEdit, Session } from "./types.ts";
 
 export interface FileProvenance {
@@ -31,7 +31,7 @@ function lineKey(s: string): string {
 }
 
 function relKey(repoNorm: string, absOrRel: string): string | null {
-  const n = normPath(absOrRel);
+  const n = /^[a-z]:[\\/]|^\//i.test(absOrRel) ? canonPath(absOrRel) : normPath(absOrRel);
   if (n.startsWith(`${repoNorm}/`)) return n.slice(repoNorm.length + 1);
   if (!/^[a-z]:\//i.test(n) && !n.startsWith("/")) return n; // already relative
   return null;
@@ -48,7 +48,7 @@ function mentions(haystack: string, path: string): boolean {
 }
 
 export function traceProvenance(repoRoot: string, session: Session, files: DiffFile[]): Provenance {
-  const repoNorm = normPath(repoRoot);
+  const repoNorm = canonPath(repoRoot);
   const caseFold = /^[a-z]:\//i.test(repoNorm) || process.platform === "win32";
   const fileKey = (rel: string) => (caseFold ? rel.toLowerCase() : rel);
 

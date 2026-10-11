@@ -1,0 +1,54 @@
+name: Off-script case or wrong verdict
+description: An agent went off-script, or offscript got a verdict wrong. These cases shape the benchmark.
+title: "[case] "
+labels: ["case", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. Real cases are the most valuable thing you can give this project.
+        **Share the report from `spike-results/`, never the raw `.jsonl` transcript.** Remove client names, paths and anything private.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened?
+      options:
+        - The agent went off-script and offscript caught it
+        - The agent went off-script and offscript MISSED it
+        - offscript flagged something that was fine (false positive)
+        - An intent was wrong, missing or invented
+        - Provenance (which turn wrote which line) was wrong
+    validations:
+      required: true
+  - type: textarea
+    id: asked
+    attributes:
+      label: What you asked the agent
+      description: Paraphrase or quote your prompt(s). Redact anything private.
+    validations:
+      required: true
+  - type: textarea
+    id: did
+    attributes:
+      label: What the agent actually did
+      description: The out-of-scope change, the false claim, the skipped test, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: offscript output
+      description: The relevant part of the report (intent table, flags, claims). Redacted.
+      render: markdown
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and version
+      placeholder: Claude Code 2.1.296 / Codex 0.13x
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed secrets, client names and private paths from everything above.
+          required: true

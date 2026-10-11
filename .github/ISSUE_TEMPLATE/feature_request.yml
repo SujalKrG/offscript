@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a check, an integration or an improvement.
+title: "[idea] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What went wrong with your agent, or what is hard today? Real examples help most.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like offscript to do
+    validations:
+      required: true
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Fit with the project rules
+      description: See CONTRIBUTING.md. Not a blocker, just a check.
+      options:
+        - label: It can cite evidence (a prompt quote or a diff hunk) for every finding.
+        - label: It is not a style or naming comment.
+        - label: It works without sending raw transcripts or code anywhere new.

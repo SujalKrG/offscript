@@ -3,7 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { normPath } from "./ingest/claude-code.ts";
+import { canonPath, normPath } from "./ingest/claude-code.ts";
 import type { DiffFile, Session } from "./types.ts";
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -87,9 +87,9 @@ function dirtyFiles(repo: string): Set<string> {
 function sessionHasDirtyFiles(repo: string, session: Session): boolean {
   const dirty = dirtyFiles(repo);
   if (dirty.size === 0) return false;
-  const root = normPath(repo);
+  const root = canonPath(repo);
   return session.edits.some((e) => {
-    const n = normPath(e.filePath);
+    const n = canonPath(e.filePath);
     return n.startsWith(`${root}/`) && dirty.has(n.slice(root.length + 1));
   });
 }

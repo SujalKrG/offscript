@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/SujalKrG/offscript/security/advisories/new
+    about: Report security issues privately, never in a public issue.
+  - name: Design and research notes
+    url: https://github.com/SujalKrG/offscript/tree/main/research
+    about: How offscript works and why, before proposing big changes.

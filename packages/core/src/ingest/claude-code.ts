@@ -7,9 +7,9 @@
 //   edits carry filePath, structuredPatch[{oldStart,newStart,lines}], originalFile, type create|update
 // Unknown record types are counted, never fatal.
 
-import { closeSync, openSync, readFileSync, readSync, readdirSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { redact } from "../redact.ts";
 import type { AssistantText, FileEdit, HumanPrompt, Session, ShellRun } from "../types.ts";
 
@@ -35,6 +35,31 @@ export function normPath(p: string): string {
   let s = p.replace(/\\/g, "/").replace(/\/+$/, "");
   if (/^[a-zA-Z]:\//.test(s) || process.platform === "win32") s = s.toLowerCase();
   return s;
+}
+
+const realCache = new Map<string, string>();
+
+/**
+ * normPath plus symlink and short-name resolution, so /var/x and /private/var/x (macOS)
+ * or a Windows short name and its long form compare equal.
+ * Falls back to the parent directory for files that no longer exist.
+ */
+export function canonPath(p: string): string {
+  const hit = realCache.get(p);
+  if (hit !== undefined) return hit;
+  let real = p;
+  try {
+    real = realpathSync.native(p);
+  } catch {
+    try {
+      real = join(realpathSync.native(dirname(p)), basename(p));
+    } catch {
+      real = p;
+    }
+  }
+  const out = normPath(real);
+  realCache.set(p, out);
+  return out;
 }
 
 export interface SessionRef {
@@ -72,7 +97,7 @@ function firstCwd(path: string): string | null {
 
 /** All Claude Code sessions whose working directory is the repo or inside it, newest first. */
 export function findSessions(repoRoot: string, projectsDir = claudeProjectsDir()): SessionRef[] {
-  const want = normPath(repoRoot);
+  const want = canonPath(repoRoot);
   const out: SessionRef[] = [];
   let dirs: string[] = [];
   try {
@@ -93,7 +118,7 @@ export function findSessions(repoRoot: string, projectsDir = claudeProjectsDir()
       const path = join(dir, f);
       const cwd = firstCwd(path);
       if (!cwd) continue;
-      const c = normPath(cwd);
+      const c = canonPath(cwd);
       if (c !== want && !c.startsWith(`${want}/`)) continue;
       const st = statSync(path);
       out.push({ id: f.replace(/\.jsonl$/, ""), path, cwd, mtimeMs: st.mtimeMs, sizeBytes: st.size });

@@ -1,6 +1,6 @@
 // Deterministic checks that combine the session with the diff.
 
-import { normPath } from "./ingest/claude-code.ts";
+import { canonPath } from "./ingest/claude-code.ts";
 import type { Facts } from "./facts.ts";
 import type { Provenance } from "./provenance.ts";
 import type { Claim, Session } from "./types.ts";
@@ -20,8 +20,8 @@ export interface TestCheck {
 }
 
 export function checkTests(session: Session, repoRoot: string): TestCheck {
-  const repoNorm = normPath(repoRoot);
-  const repoEdits = session.edits.filter((e) => !e.failed && normPath(e.filePath).startsWith(`${repoNorm}/`));
+  const repoNorm = canonPath(repoRoot);
+  const repoEdits = session.edits.filter((e) => !e.failed && canonPath(e.filePath).startsWith(`${repoNorm}/`));
   const lastEdit = repoEdits[repoEdits.length - 1];
   const tests = session.shell.filter((s) => s.isTest);
   const lastTest = tests[tests.length - 1];

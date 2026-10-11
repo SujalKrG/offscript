@@ -99,6 +99,20 @@ describe("diff range from commits made during the session", () => {
   });
 });
 
+describe("symlinked paths (macOS /var vs /private/var)", () => {
+  test.skipIf(process.platform === "win32")("finds sessions and traces lines when the repo is reached through a symlink", () => {
+    const { symlinkSync } = require("node:fs") as typeof import("node:fs");
+    const link = join(mkdtempSync(join(tmpdir(), "offscript-link-")), "shop-link");
+    symlinkSync(fx.repo, link);
+    expect(findSessions(link, fx.projects).map((r) => r.id)).toEqual([fx.sessionId]);
+    const s = parseSession(fx.transcript);
+    const files = diff(fx.repo, resolveRange(fx.repo, s)!);
+    const viaLink = traceProvenance(link, s, files);
+    expect(viaLink.coverage).toBe(traceProvenance(root, s, files).coverage);
+    expect(viaLink.editsOutsideRepo).toBe(0);
+  });
+});
+
 describe("intent ledger via headless claude", () => {
   // The fake CLI is a bash script, so this one test runs on macOS/Linux/CI only.
   test.skipIf(process.platform === "win32")("calls the CLI with safety flags, parses fenced JSON, never sends the diff", () => {
