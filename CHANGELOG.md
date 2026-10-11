@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Social preview image, `.gitattributes` and `.editorconfig`.
 
 ### Changed
+- Code is formatted and linted with Biome (`bun run lint`, `bun run format`).
 - Test fixture builds its fake API key at runtime, so no key-shaped text appears in the source.
 
 ### Fixed

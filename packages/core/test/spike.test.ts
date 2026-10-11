@@ -148,7 +148,15 @@ describe("report", () => {
       range,
       facts,
       provenance,
-      ledger: { intents: [], claims: [{ text: "All tests pass", type: "tests_pass" }], confidence: "low", notes: "", backend: "none", costUsd: null, error: null },
+      ledger: {
+        intents: [],
+        claims: [{ text: "All tests pass", type: "tests_pass" }],
+        confidence: "low",
+        notes: "",
+        backend: "none",
+        costUsd: null,
+        error: null,
+      },
       tests: checkTests(s, root),
       flags: fileFlags(provenance, facts),
       error: null,
@@ -167,7 +175,8 @@ describe("unit", () => {
     expect(r.text).toContain("api_key: [REDACTED:assignment]");
   });
   test("test command detection", () => {
-    for (const c of ["npm test", "bun test", "pnpm run test", "npx vitest run", "pytest -q", "go test ./...", "php artisan test"]) expect(TEST_COMMAND_RE.test(c)).toBe(true);
+    for (const c of ["npm test", "bun test", "pnpm run test", "npx vitest run", "pytest -q", "go test ./...", "php artisan test"])
+      expect(TEST_COMMAND_RE.test(c)).toBe(true);
     for (const c of ["npm run build", "git status", "cat test.txt"]) expect(TEST_COMMAND_RE.test(c)).toBe(false);
   });
 });

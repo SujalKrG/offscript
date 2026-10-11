@@ -7,16 +7,30 @@
 //   edits carry filePath, structuredPatch[{oldStart,newStart,lines}], originalFile, type create|update
 // Unknown record types are counted, never fatal.
 
-import { closeSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { redact } from "../redact.ts";
 import type { AssistantText, FileEdit, HumanPrompt, Session, ShellRun } from "../types.ts";
 
 const KNOWN_TYPES = new Set([
-  "user", "assistant", "system", "attachment", "progress", "queue-operation",
-  "file-history-snapshot", "summary", "last-prompt", "ai-title", "custom-title", "mode",
-  "atis-latch", "cost-state", "permission-mode", "agent-name", "tag",
+  "user",
+  "assistant",
+  "system",
+  "attachment",
+  "progress",
+  "queue-operation",
+  "file-history-snapshot",
+  "summary",
+  "last-prompt",
+  "ai-title",
+  "custom-title",
+  "mode",
+  "atis-latch",
+  "cost-state",
+  "permission-mode",
+  "agent-name",
+  "tag",
 ]);
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -235,11 +249,11 @@ export function parseSession(path: string): Session {
 
     if (hasToolResult) {
       for (const b of rec.message.content as any[]) {
-        if (!b || b.type !== "tool_result") continue;
+        if (b?.type !== "tool_result") continue;
         const call = pending.get(b.tool_use_id);
         if (!call) continue;
         pending.delete(b.tool_use_id);
-        recordTool(call, b.tool_use_id, b.is_error === true ? true : false, rec.toolUseResult, true);
+        recordTool(call, b.tool_use_id, b.is_error === true, rec.toolUseResult, true);
       }
       continue;
     }

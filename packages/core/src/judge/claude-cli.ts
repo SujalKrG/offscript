@@ -58,13 +58,7 @@ export function claudeAvailable(): boolean {
   return false;
 }
 
-export function runClaudeJson<T>(opts: {
-  system: string;
-  input: string;
-  model?: string;
-  timeoutMs?: number;
-  validate?: (v: unknown) => T;
-}): JudgeResult<T> {
+export function runClaudeJson<T>(opts: { system: string; input: string; model?: string; timeoutMs?: number; validate?: (v: unknown) => T }): JudgeResult<T> {
   const model = opts.model ?? process.env.OFFSCRIPT_MODEL ?? "haiku";
   const dir = mkdtempSync(join(tmpdir(), "offscript-judge-"));
   const sysPath = join(dir, "system.txt");

@@ -40,8 +40,7 @@ export const DEFAULT_SENSITIVE: RegExp[] = [
   /(^|\/)nginx[^/]*\.conf$/i,
 ];
 
-export const TEST_FILE_RE =
-  /(^|\/)(__tests__|tests?|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py)$|(^|\/)test_[^/]+\.py$|Test\.php$|Tests?\.cs$/i;
+export const TEST_FILE_RE = /(^|\/)(__tests__|tests?|spec|e2e)\/|\.(test|spec)\.[cm]?[jt]sx?$|_test\.(go|py)$|(^|\/)test_[^/]+\.py$|Test\.php$|Tests?\.cs$/i;
 
 const ASSERT_RE = /\b(expect\s*\(|assert[A-Za-z]*\s*[.(]|should\.|\.should\b|t\.(?:Error|Fatal|Fail)\w*\s*\(|\$this->assert\w*\s*\()/g;
 const SKIP_RE =
@@ -85,10 +84,11 @@ export function extractFacts(files: DiffFile[], sensitive: RegExp[] = DEFAULT_SE
   };
 
   const addedSymbols = new Set<string>();
-  for (const f of files) for (const l of f.added) {
-    const s = symbolOf(l.text);
-    if (s) addedSymbols.add(s);
-  }
+  for (const f of files)
+    for (const l of f.added) {
+      const s = symbolOf(l.text);
+      if (s) addedSymbols.add(s);
+    }
 
   for (const f of files) {
     facts.linesAdded += f.added.length;

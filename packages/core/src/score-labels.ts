@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const outArg = process.argv.indexOf("--out");
-const root = resolve(outArg >= 0 ? process.argv[outArg + 1] ?? "spike-results" : "spike-results");
+const root = resolve(outArg >= 0 ? (process.argv[outArg + 1] ?? "spike-results") : "spike-results");
 
 function walk(dir: string): string[] {
   let out: string[] = [];

@@ -1,7 +1,7 @@
 // Markdown report for one session, with a labelling block for the spike gate.
 
 import type { TestCheck } from "./checks.ts";
-import { verdictForClaim, type FileFlag } from "./checks.ts";
+import { type FileFlag, verdictForClaim } from "./checks.ts";
 import type { Facts } from "./facts.ts";
 import type { DiffRange } from "./git.ts";
 import type { Provenance } from "./provenance.ts";
@@ -30,7 +30,9 @@ export function renderSession(r: SessionReport): string {
   L.push(`<!-- offscript-spike session=${s.id} coverage=${r.provenance?.coverage ?? "null"} intents=${r.ledger.intents.length} -->`);
   L.push("");
   L.push(`- Repo: \`${r.repo}\`  Branch: \`${s.gitBranch ?? "?"}\`  Claude Code: ${s.cliVersion ?? "?"}`);
-  L.push(`- Prompts: ${s.prompts.length}  Edits: ${s.edits.length}  Shell commands: ${s.shell.length}  Compactions: ${s.compactions}  Secrets redacted: ${s.redactions}`);
+  L.push(
+    `- Prompts: ${s.prompts.length}  Edits: ${s.edits.length}  Shell commands: ${s.shell.length}  Compactions: ${s.compactions}  Secrets redacted: ${s.redactions}`,
+  );
   const unknown = Object.entries(s.unknownRecordTypes);
   if (unknown.length) L.push(`- Unknown record types (parser warning): ${unknown.map(([k, v]) => `${k} x${v}`).join(", ")}`);
   L.push(`- Change reviewed: ${r.range ? r.range.label : "no diff found for this session"}`);
@@ -40,7 +42,9 @@ export function renderSession(r: SessionReport): string {
   // Intents
   L.push(`## 1. What you asked for (intent ledger)`);
   L.push("");
-  L.push(`Backend: ${r.ledger.backend}${r.ledger.costUsd !== null ? `, est. cost $${r.ledger.costUsd.toFixed(4)}` : ""}. Confidence: **${r.ledger.confidence}**.`);
+  L.push(
+    `Backend: ${r.ledger.backend}${r.ledger.costUsd !== null ? `, est. cost $${r.ledger.costUsd.toFixed(4)}` : ""}. Confidence: **${r.ledger.confidence}**.`,
+  );
   if (r.ledger.error) L.push(`\n> Intent extraction failed: ${r.ledger.error}`);
   if (r.ledger.notes) L.push(`\nModel note: ${r.ledger.notes}`);
   L.push("");
@@ -57,7 +61,9 @@ export function renderSession(r: SessionReport): string {
   // Claims
   L.push(`## 2. What the agent claimed vs evidence`);
   L.push("");
-  L.push(`Tests: **${r.tests.evidence}** (${r.tests.testRuns} test run(s) in session${r.tests.lastTestCommand ? `, last: \`${esc(r.tests.lastTestCommand)}\`` : ""}).`);
+  L.push(
+    `Tests: **${r.tests.evidence}** (${r.tests.testRuns} test run(s) in session${r.tests.lastTestCommand ? `, last: \`${esc(r.tests.lastTestCommand)}\`` : ""}).`,
+  );
   L.push("");
   if (r.ledger.claims.length) {
     for (const c of r.ledger.claims) L.push(`- [${verdictForClaim(c, r.tests)}] "${esc(c.text)}" (${c.type})`);
@@ -73,14 +79,26 @@ export function renderSession(r: SessionReport): string {
     if (f.added.length) L.push(`- Added: ${f.added.map((x) => `\`${x}\``).join(", ")}`);
     if (f.deleted.length) L.push(`- **Deleted:** ${f.deleted.map((x) => `\`${x}\``).join(", ")}`);
     if (f.renamed.length) L.push(`- Renamed: ${f.renamed.map((x) => `\`${x.from}\` -> \`${x.to}\``).join(", ")}`);
-    if (f.removedSymbols.length) L.push(`- **Removed symbols:** ${f.removedSymbols.slice(0, 20).map((x) => `\`${x.symbol}\` (${x.file})`).join(", ")}`);
+    if (f.removedSymbols.length)
+      L.push(
+        `- **Removed symbols:** ${f.removedSymbols
+          .slice(0, 20)
+          .map((x) => `\`${x.symbol}\` (${x.file})`)
+          .join(", ")}`,
+      );
     if (f.dependencyFiles.length) L.push(`- Dependency files: ${f.dependencyFiles.map((x) => `\`${x}\``).join(", ")}`);
     if (f.sensitiveFiles.length) L.push(`- **Sensitive paths:** ${f.sensitiveFiles.map((x) => `\`${x}\``).join(", ")}`);
     const ti = f.testIntegrity;
     if (f.testFiles.length) {
       L.push(`- Test files changed: ${f.testFiles.length}; assertions +${ti.assertionsAdded} / -${ti.assertionsRemoved}`);
     }
-    if (ti.skipsAdded.length) L.push(`- **Skip/only added:** ${ti.skipsAdded.slice(0, 10).map((x) => `${x.file}: \`${esc(x.line)}\``).join("; ")}`);
+    if (ti.skipsAdded.length)
+      L.push(
+        `- **Skip/only added:** ${ti.skipsAdded
+          .slice(0, 10)
+          .map((x) => `${x.file}: \`${esc(x.line)}\``)
+          .join("; ")}`,
+      );
     if (ti.testFilesDeleted.length) L.push(`- **Test files deleted:** ${ti.testFilesDeleted.join(", ")}`);
     if (ti.assertionsRemoved > ti.assertionsAdded) L.push(`- **Net assertions went down by ${ti.assertionsRemoved - ti.assertionsAdded}.**`);
     L.push("");
@@ -93,7 +111,13 @@ export function renderSession(r: SessionReport): string {
     L.push("");
     L.push(`Traced **${p.attributedLines} of ${p.totalAddedLines}** added lines to an agent edit: **${pct(p.coverage)}**.`);
     if (p.editsOutsideRepo) L.push(`Edits outside this repo in the session: ${p.editsOutsideRepo}.`);
-    if (p.agentFilesNotInDiff.length) L.push(`Agent edited but nothing left in this diff: ${p.agentFilesNotInDiff.slice(0, 15).map((x) => `\`${x}\``).join(", ")}`);
+    if (p.agentFilesNotInDiff.length)
+      L.push(
+        `Agent edited but nothing left in this diff: ${p.agentFilesNotInDiff
+          .slice(0, 15)
+          .map((x) => `\`${x}\``)
+          .join(", ")}`,
+      );
     L.push("");
     L.push(`| file | status | +lines | traced | written in turn(s) | user named it | agent mentioned it | flags |`);
     L.push(`|---|---|---|---|---|---|---|---|`);

@@ -5,14 +5,19 @@
   "license": "Apache-2.0",
   "author": "Sujal (https://github.com/SujalKrG)",
   "repository": "github:SujalKrG/offscript",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "spike": "bun packages/core/src/spike.ts",
     "spike:score": "bun packages/core/src/score-labels.ts",
     "test": "bun test",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome ci .",
+    "format": "biome check --write ."
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.15",
     "@types/bun": "1.4.2",
     "@types/node": "26.6.5",
     "typescript": "7.0.2"

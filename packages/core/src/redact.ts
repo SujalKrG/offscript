@@ -10,11 +10,11 @@ interface Rule {
 
 const RULES: Rule[] = [
   { name: "private-key", re: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
-  { name: "anthropic-key", re: /\bsk-ant-[A-Za-z0-9_\-]{20,}/g },
-  { name: "openai-key", re: /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{20,}/g },
+  { name: "anthropic-key", re: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
+  { name: "openai-key", re: /\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}/g },
   { name: "github-token", re: /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
   { name: "aws-access-key", re: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
-  { name: "google-api-key", re: /\bAIza[0-9A-Za-z_\-]{35}\b/g },
+  { name: "google-api-key", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
   { name: "slack-token", re: /\bxox[abposr]-[A-Za-z0-9-]{10,}\b/g },
   { name: "stripe-key", re: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/g },
   { name: "jwt", re: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g },

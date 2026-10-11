@@ -49,7 +49,12 @@ export function resolveRange(repo: string, session: Session, o: RangeOverrides =
   const end = new Date(new Date(session.endedAt).getTime() + 2 * 3600 * 1000);
   if (!Number.isNaN(start.getTime())) {
     const log = git(repo, ["log", "--reverse", "--format=%H", `--since=${start.toISOString()}`, `--until=${end.toISOString()}`]);
-    const commits = log.ok ? log.out.split("\n").map((s) => s.trim()).filter(Boolean) : [];
+    const commits = log.ok
+      ? log.out
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
     if (commits.length > 0) {
       const first = commits[0]!;
       const last = commits[commits.length - 1]!;
@@ -113,7 +118,10 @@ function untrackedAsAdded(repo: string): DiffFile[] {
   const r = git(repo, ["ls-files", "--others", "--exclude-standard"]);
   if (!r.ok) return [];
   const out: DiffFile[] = [];
-  for (const rel of r.out.split("\n").map((s) => s.trim()).filter(Boolean)) {
+  for (const rel of r.out
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
     const path = rel.replace(/\\/g, "/");
     const f: DiffFile = { path, oldPath: null, status: "added", added: [], removed: [], binary: false };
     try {
@@ -122,7 +130,7 @@ function untrackedAsAdded(repo: string): DiffFile[] {
       else {
         const lines = buf.toString("utf8").replace(/\r\n/g, "\n").split("\n");
         if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-        lines.forEach((text, i) => f.added.push({ file: path, newLineNo: i + 1, text }));
+        for (const [i, text] of lines.entries()) f.added.push({ file: path, newLineNo: i + 1, text });
       }
     } catch {
       continue;

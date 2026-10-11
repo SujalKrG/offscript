@@ -66,7 +66,10 @@ export function traceProvenance(repoRoot: string, session: Session, files: DiffF
     const k = fileKey(rel);
     touched.add(k);
     let m = added.get(k);
-    if (!m) added.set(k, (m = new Map()));
+    if (!m) {
+      m = new Map();
+      added.set(k, m);
+    }
     for (const line of e.addedLines) {
       const lk = lineKey(line);
       if (!lk) continue;
@@ -78,7 +81,10 @@ export function traceProvenance(repoRoot: string, session: Session, files: DiffF
 
   const promptText = session.prompts.map((p) => p.text).join("\n");
   const agentText = session.assistant.map((a) => a.text).join("\n");
-  const shellText = session.shell.map((s) => s.command).join("\n").toLowerCase();
+  const shellText = session.shell
+    .map((s) => s.command)
+    .join("\n")
+    .toLowerCase();
 
   const out: FileProvenance[] = [];
   let total = 0;

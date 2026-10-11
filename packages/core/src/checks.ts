@@ -1,16 +1,11 @@
 // Deterministic checks that combine the session with the diff.
 
-import { canonPath } from "./ingest/claude-code.ts";
 import type { Facts } from "./facts.ts";
+import { canonPath } from "./ingest/claude-code.ts";
 import type { Provenance } from "./provenance.ts";
 import type { Claim, Session } from "./types.ts";
 
-export type TestEvidence =
-  | "passed-after-last-edit"
-  | "failed-after-last-edit"
-  | "ran-only-before-last-edit"
-  | "never-ran"
-  | "no-edits";
+export type TestEvidence = "passed-after-last-edit" | "failed-after-last-edit" | "ran-only-before-last-edit" | "never-ran" | "no-edits";
 
 export interface TestCheck {
   evidence: TestEvidence;
@@ -52,9 +47,9 @@ export function verdictForClaim(claim: Claim, tests: TestCheck): ClaimVerdict {
 }
 
 export type FileFlag =
-  | "undisclosed"          // agent changed it, user never named it, agent never mentioned it
-  | "unrequested?"         // agent changed it, user never named it, agent did mention it
-  | "not-from-edit-tools"  // nothing in this session's edit tools wrote these lines
+  | "undisclosed" // agent changed it, user never named it, agent never mentioned it
+  | "unrequested?" // agent changed it, user never named it, agent did mention it
+  | "not-from-edit-tools" // nothing in this session's edit tools wrote these lines
   | "sensitive"
   | "deleted"
   | "dependency"
