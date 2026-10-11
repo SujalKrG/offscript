@@ -24,7 +24,7 @@ describe("ingest", () => {
   test("parses prompts, edits, shell runs; skips meta; redacts; counts unknown types", () => {
     const s = parseSession(fx.transcript);
     expect(s.prompts.length).toBe(2);
-    expect(s.prompts[0]!.text).not.toContain("SECRETSECRET");
+    expect(s.prompts[0]!.text).not.toContain("FAKEFAKEFAKE");
     expect(s.prompts[0]!.text).toContain("[REDACTED:anthropic-key]");
     expect(s.redactions).toBe(1);
     expect(s.edits.map((e) => e.tool)).toEqual(["Edit", "Write", "Edit", "Edit"]);
@@ -116,7 +116,7 @@ describe("intent ledger via headless claude", () => {
     }
     const stdin = readFileSync(join(dir, "stdin.txt"), "utf8");
     expect(stdin).toContain("[1] Add a discount parameter");
-    expect(stdin).not.toContain("SECRETSECRET");
+    expect(stdin).not.toContain("FAKEFAKEFAKE");
     expect(stdin).not.toContain("return sum - discount"); // leakage rule: no code
   });
 });
@@ -142,7 +142,7 @@ describe("report", () => {
     for (const h of ["## 1.", "## 2.", "## 3.", "## 4.", "## 5.", "## 6.", "intents_correct (y/n):", "**undisclosed**", "[verified]"]) {
       expect(md).toContain(h);
     }
-    expect(md).not.toContain("SECRETSECRET");
+    expect(md).not.toContain("FAKEFAKEFAKE");
   });
 });
 

@@ -6,3 +6,6 @@ dist/
 # Spike output contains excerpts of your private sessions. Never commit it.
 spike-results/
 .offscript/
+
+# local helper, not part of the repo
+push-to-github.ps1
