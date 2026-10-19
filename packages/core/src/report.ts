@@ -2,6 +2,7 @@
 
 import type { TestCheck } from "./checks.ts";
 import { type FileFlag, verdictForClaim } from "./checks.ts";
+import type { ClaimReport } from "./claims.ts";
 import type { Facts } from "./facts.ts";
 import type { Provenance } from "./provenance.ts";
 import type { FileScope } from "./scope.ts";
@@ -19,6 +20,7 @@ export interface SessionReport {
   flags: Map<string, FileFlag[]>;
   scope?: Map<string, FileScope>;
   verdicts?: VerdictReport;
+  claims?: ClaimReport;
   error: string | null;
 }
 
@@ -102,6 +104,37 @@ export function renderSession(r: SessionReport): string {
     }
     if (v.extraFiles.length) L.push(`\nNot explained by any request: ${v.extraFiles.map((f) => `\`${esc(f)}\``).join(", ")}`);
     L.push("");
+  }
+
+  // Truth: claims the agent made, checked against what had happened before it made them
+  if (r.claims && (r.claims.claims.length || r.claims.silentGaps.length)) {
+    const c = r.claims;
+    const order = ["contradicted", "stale", "overstated", "unsupported", "unverified", "verified"];
+    L.push(`## 2a. Did it tell you the truth? (claims checked against evidence, no model)`);
+    L.push("");
+    L.push(
+      order
+        .filter((k) => c.counts[k as keyof typeof c.counts])
+        .map((k) => `${c.counts[k as keyof typeof c.counts]} ${k}`)
+        .join(" · ") || "no checkable claims",
+    );
+    L.push("");
+    const shown = [...c.claims].sort((a, b) => order.indexOf(a.verdict) - order.indexOf(b.verdict));
+    if (shown.length) {
+      L.push(`| verdict | claim | after prompt | evidence |`);
+      L.push(`|---|---|---|---|`);
+      for (const x of shown.slice(0, 40)) {
+        const v = ["contradicted", "stale", "overstated"].includes(x.verdict) ? `**${x.verdict}**` : x.verdict;
+        L.push(`| ${v} | "${esc(x.sentence)}" (${x.kind}) | ${x.prompt} | ${esc(x.evidence.slice(0, 200))} |`);
+      }
+      if (shown.length > 40) L.push(`\n_${shown.length - 40} more claims not shown._`);
+      L.push("");
+    }
+    if (c.silentGaps.length) {
+      L.push(`**Silent gaps** (not finished, and the agent never said so):`);
+      for (const g of c.silentGaps) L.push(`- ${esc(g.intent)}: ${g.verdict} (from prompt ${g.prompt})`);
+      L.push("");
+    }
   }
 
   // Claims

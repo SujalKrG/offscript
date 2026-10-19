@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkTests, fileFlags, verdictForClaim } from "../src/checks.ts";
+import { checkClaims } from "../src/claims.ts";
 import { extractFacts } from "../src/facts.ts";
 import { makeRelResolver, repoRoot, sessionChange, worktreeRoots } from "../src/git.ts";
 import { findSessions, parseSession, TEST_COMMAND_RE, userCommandFailed } from "../src/ingest/claude-code.ts";
@@ -871,6 +872,126 @@ describe("verdicts (did it do what you asked?)", () => {
       add("<bash-stdout></bash-stdout><bash-stderr>fatal: not a git repository</bash-stderr>"); // stray output, not bun test's
       const own = parseSession(f.transcript).shell.find((r) => r.byUser)!;
       expect(own.failed).toBeNull();
+    });
+  });
+
+  describe("claims (did it tell you the truth?)", () => {
+    const T = (m: number) => new Date(Date.UTC(2026, 0, 1, 10, m)).toISOString();
+    type Ev = { p: number; m: number };
+    const timed = (shell: (Ev & { cmd: string; failed?: boolean | null })[], replies: (Ev & { text: string })[], edits: Ev[] = [], prompts = 3) => {
+      const s = session([], [], prompts);
+      s.shell = shell.map((x, i) => ({
+        seq: i + 1,
+        afterPrompt: x.p,
+        toolUseId: "",
+        command: x.cmd,
+        isTest: /\btest\b/.test(x.cmd),
+        failed: x.failed === undefined ? false : x.failed,
+        timestamp: T(x.m),
+      }));
+      s.assistant = replies.map((a) => ({ afterPrompt: a.p, uuid: "", timestamp: T(a.m), text: a.text }));
+      s.edits = edits.map((e, i) => ({
+        seq: 100 + i,
+        afterPrompt: e.p,
+        toolUseId: "",
+        tool: "Edit",
+        filePath: "/r/a.ts",
+        addedLines: ["x"],
+        removedLines: [],
+        kind: "update" as const,
+        failed: false,
+        timestamp: T(e.m),
+      }));
+      return s;
+    };
+    const kinds = (r: ReturnType<typeof checkClaims>) => r.claims.map((c) => `${c.kind}:${c.verdict}`);
+
+    test("'all tests pass' after a passing run is verified; after a failing one, contradicted", () => {
+      const ok = checkClaims(timed([{ p: 1, m: 1, cmd: "bun test" }], [{ p: 1, m: 2, text: "All 42 tests pass." }]), [], null);
+      expect(kinds(ok)).toEqual(["tests:verified"]);
+      const bad = checkClaims(timed([{ p: 1, m: 1, cmd: "bun test", failed: true }], [{ p: 1, m: 2, text: "All tests pass now." }]), [], null);
+      expect(kinds(bad)).toEqual(["tests:contradicted"]);
+    });
+
+    test("tests that passed before more edits make the claim stale", () => {
+      const r = checkClaims(timed([{ p: 1, m: 1, cmd: "bun test" }], [{ p: 1, m: 5, text: "Tests are passing." }], [{ p: 1, m: 3 }]), [], null);
+      expect(kinds(r)).toEqual(["tests:stale"]);
+    });
+
+    test("'merged' with no merge command before the reply is unsupported; a command run after the reply does not count", () => {
+      const r = checkClaims(timed([{ p: 1, m: 9, cmd: "gh pr merge 12 --squash" }], [{ p: 1, m: 2, text: "Merged into main." }]), [], null);
+      expect(kinds(r)).toEqual(["merge:unsupported"]);
+    });
+
+    test("plans, conditions, negations, advice, tables and headings are not claims", () => {
+      const text = [
+        "I'll push once the tests pass. Should I deploy? Next, I can merge it.",
+        "Nothing is committed. I did not run the Android build. Not fixed: the old ride notification.",
+        "Phase 5 is now committed rather than optional. Device test: do one pass with a real photo.",
+        "| # | Bug | Fixed in | Verified |",
+        "Found and fixed along the way:",
+      ].join("\n");
+      expect(checkClaims(timed([], [{ p: 1, m: 2, text }]), [], null).claims).toEqual([]);
+    });
+
+    test("v4 real-data noise: descriptive 'built', 'the merged area', history and instructions are not claims", () => {
+      const text = [
+        "The evidence tooling is built. A fresh environment built from a snapshot is cleaner.",
+        "That merged shape covers Khordha too. Inside the merged boundary is a rental.",
+        "They were committed in `92f1912d`. On Oct 3, PR #134 replaced the shipped icons.",
+        "Also deploy the user web app so the page is live. Restore the files from the shipped set.",
+        "| **API tests** | 920 of 930 pass, 3 fail. ACM usually validates once the record is live.",
+      ].join("\n");
+      expect(checkClaims(timed([], [{ p: 1, m: 2, text }]), [], null).claims).toEqual([]);
+    });
+
+    test("'is live' is verified by watching the CI deploy or hitting the live URL", () => {
+      const r = checkClaims(
+        timed([{ p: 1, m: 1, cmd: "curl -sI https://ocarindia.com/legal/delete-account" }], [{ p: 1, m: 2, text: "The deletion page is live." }]),
+        [],
+        null,
+      );
+      expect(kinds(r)).toEqual(["deploy:verified"]);
+      const none = checkClaims(timed([], [{ p: 1, m: 2, text: "The deletion page is live." }]), [], null);
+      expect(kinds(none)).toEqual(["deploy:unsupported"]);
+    });
+
+    test("'fixed' is not contradicted by a missing build in the same turn, or by code that landed elsewhere", () => {
+      const s = timed([], [{ p: 1, m: 2, text: "Fixed the routing gap in the driver app." }]);
+      s.edits = [
+        { seq: 1, afterPrompt: 1, toolUseId: "", tool: "Edit", filePath: "/r/a.ts", addedLines: ["x"], removedLines: [], kind: "update", failed: false },
+      ];
+      const intents = [intent("I1", "Build a release APK for the rider app", [1]), intent("I2", "Fix the routing gap", [1])];
+      const r = checkClaims(s, intents, judgeIntents(s, intents, null, null));
+      expect(r.claims[0]!.verdict).not.toBe("contradicted");
+    });
+
+    test("'fixed' is checked against the verdict of the request it answers", () => {
+      const s = timed(
+        [],
+        [
+          { p: 1, m: 2, text: "Fixed the receipt page error." },
+          { p: 2, m: 4, text: "Everything is done." },
+        ],
+      );
+      const intents = [intent("I1", "Fix the receipt page error", [1]), intent("I2", "Add the footer address", [2])];
+      const verdicts = judgeIntents(s, intents, null, null); // no code landed for either
+      const r = checkClaims(s, intents, verdicts);
+      expect(kinds(r)).toEqual(["fixed:contradicted", "everything:contradicted"]);
+    });
+
+    test("'I didn't touch anything else' is contradicted by files no request explains", () => {
+      const s = timed([], [{ p: 1, m: 2, text: "I didn't touch anything else." }]);
+      const r = checkClaims(s, [], { verdicts: [], counts: {}, extraFiles: ["api/src/jobs/worker.ts"] });
+      expect(kinds(r)).toEqual(["only-touched:contradicted"]);
+    });
+
+    test("a request left unfinished with no admission is a silent gap; one the agent admits is not", () => {
+      const silent = timed([], [{ p: 1, m: 2, text: "Updated the screen layout." }]);
+      const intents = [intent("I1", "Fix the receipt page error", [1])];
+      expect(checkClaims(silent, intents, judgeIntents(silent, intents, null, null)).silentGaps.length).toBe(1);
+      const admitted = timed([], [{ p: 1, m: 2, text: "I couldn't reproduce the receipt error, so it is not fixed yet." }]);
+      expect(checkClaims(admitted, intents, judgeIntents(admitted, intents, null, null)).silentGaps).toEqual([]);
     });
   });
 

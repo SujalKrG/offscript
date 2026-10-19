@@ -146,7 +146,7 @@ export function intentWindows(intents: Intent[], promptCount: number): Map<strin
   return out;
 }
 
-function actionEvidence(kind: ActionKind, shell: ShellRun[]): ActionEvidence {
+export function actionEvidence(kind: ActionKind, shell: ShellRun[]): ActionEvidence {
   const runs = shell.filter((r) => (kind === "tests" ? r.isTest || TEST_RUN_RE.test(r.command) : ACTION_RAN[kind].test(r.command)));
   if (runs.length === 0) return { kind, status: "missing", command: null };
   // The last attempt decides (a retry that succeeded fixes an earlier failure); a run with no recorded result proves nothing.

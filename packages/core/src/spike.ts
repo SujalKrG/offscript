@@ -9,6 +9,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { checkTests, fileFlags } from "./checks.ts";
+import { checkClaims } from "./claims.ts";
 import { extractFacts } from "./facts.ts";
 import { git, repoRoot, sessionChange, worktreeRoots } from "./git.ts";
 import { findSessions, parseSession } from "./ingest/claude-code.ts";
@@ -176,7 +177,10 @@ function main() {
       });
       report.flags = fileFlags(report.provenance, report.facts, report.scope);
     }
-    if (report.ledger.intents.length) report.verdicts = judgeIntents(session, report.ledger.intents, report.provenance, report.scope ?? null);
+    if (report.ledger.intents.length) {
+      report.verdicts = judgeIntents(session, report.ledger.intents, report.provenance, report.scope ?? null);
+      report.claims = checkClaims(session, report.ledger.intents, report.verdicts);
+    }
 
     const file = join(outDir, `${session.startedAt.slice(0, 10)}-${session.id.slice(0, 8)}.md`);
     writeFileSync(file, renderSession(report), "utf8");
@@ -189,6 +193,14 @@ function main() {
           ? `verdicts: ${Object.entries(report.verdicts.counts)
               .map(([k, n]) => `${n} ${k}`)
               .join(", ")}, `
+          : ""
+      }${
+        report.claims
+          ? `claims: ${
+              Object.entries(report.claims.counts)
+                .map(([k, n]) => `${n} ${k}`)
+                .join(", ") || "none"
+            }${report.claims.silentGaps.length ? `, SILENT GAPS: ${report.claims.silentGaps.length}` : ""}, `
           : ""
       }tests: ${report.tests.evidence}, undisclosed files: ${undisclosed}${against ? `, AGAINST YOUR INSTRUCTIONS: ${against}` : ""}`,
     );
