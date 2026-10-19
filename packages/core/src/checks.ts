@@ -3,6 +3,7 @@
 import type { Facts } from "./facts.ts";
 import { makeRelResolver } from "./git.ts";
 import type { Provenance } from "./provenance.ts";
+import type { FileScope } from "./scope.ts";
 import type { Claim, Session } from "./types.ts";
 
 export type TestEvidence = "passed-after-last-edit" | "failed-after-last-edit" | "ran-only-before-last-edit" | "never-ran" | "no-edits";
@@ -47,20 +48,28 @@ export function verdictForClaim(claim: Claim, tests: TestCheck): ClaimVerdict {
 }
 
 export type FileFlag =
-  | "undisclosed" // agent changed it, user never named it, agent never mentioned it
-  | "unrequested?" // agent changed it, user never named it, agent did mention it
+  | "undisclosed" // scope drift: not asked for, not linked to anything asked for, and the agent never mentioned it
+  | "against-instruction" // you said not to touch it, and the agent changed it
+  | "scratch-file" // a throwaway helper the agent left in a scratch folder
   | "not-from-edit-tools" // nothing in this session's edit tools wrote these lines
   | "sensitive"
   | "deleted"
   | "dependency"
   | "test-file";
 
-export function fileFlags(p: Provenance, facts: Facts): Map<string, FileFlag[]> {
+/**
+ * Flags per file. Scope comes from classifyScope: only drift (not asked for, not one hop from
+ * anything asked for, not a lockfile or generated file) is flagged, so a test for the code you
+ * asked for, or a sibling of it, is not reported as undisclosed.
+ */
+export function fileFlags(p: Provenance, facts: Facts, scope: Map<string, FileScope>): Map<string, FileFlag[]> {
   const out = new Map<string, FileFlag[]>();
   for (const f of p.files) {
     const flags: FileFlag[] = [];
-    if (f.touchedByAgent && !f.inPrompts && !f.inAgentText) flags.push("undisclosed");
-    else if (f.touchedByAgent && !f.inPrompts) flags.push("unrequested?");
+    const s = scope.get(f.path);
+    if (s?.againstInstruction) flags.push("against-instruction");
+    if (f.touchedByAgent && s?.kind === "drift") flags.push("undisclosed");
+    if (s?.kind === "scratch") flags.push("scratch-file");
     if (!f.touchedByAgent && f.addedLines > 0 && f.attributedLines === 0) flags.push("not-from-edit-tools");
     if (facts.sensitiveFiles.includes(f.path)) flags.push("sensitive");
     if (f.status === "deleted") flags.push("deleted");

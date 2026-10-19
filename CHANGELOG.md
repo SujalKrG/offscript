@@ -6,6 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ## [Unreleased]
 
 ### Added
+- Scope check per changed file: anchor (what you asked for), related (its test, an import either way, a sibling in a small folder, or something the agent told you about), derived (lockfiles, generated and housekeeping files) or drift. Only drift is flagged `undisclosed`, which removes the noise on test files and on files that belong to the requested feature. Words that appear in more than 5% of the repo's paths (app names like `driver`) do not anchor files on their own.
+- Sensitive files (infra, auth, payments, migrations, CI, `.env`) need direct evidence to be in scope; sitting next to an in-scope file is not enough. Files in scratch folders (`.scratch/`, `tmp/`) are grouped as `scratch-file` with one summary line instead of being flagged one by one.
+- `against-instruction` flag: the agent changed a file you explicitly told it not to touch ("don't touch auth", "leave payments alone").
 - README with logo, demo, comparison table and roadmap.
 - Contributing guide, code of conduct, security policy, issue forms, pull request template.
 - CI workflow running tests and type checks on Linux and macOS.
@@ -15,7 +18,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `bun run check` runs CI's required checks locally.
 
 ### Changed
-- Code is formatted and linted with Biome (`bun run lint`, `bun run format`).
+- Removed the `unrequested?` flag, which fired on almost every file; the report's scope column says why each file is in scope instead.
+- Codebase formatted with Biome; a few lint findings fixed (assignments inside expressions, a comma operator, unneeded regex escapes).
 - Test fixture builds its fake API key at runtime, so no key-shaped text appears in the source.
 
 ### Fixed

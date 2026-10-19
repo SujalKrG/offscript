@@ -10,12 +10,13 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { checkTests, fileFlags } from "./checks.ts";
 import { extractFacts } from "./facts.ts";
-import { repoRoot, sessionChange, worktreeRoots } from "./git.ts";
+import { git, repoRoot, sessionChange, worktreeRoots } from "./git.ts";
 import { findSessions, parseSession } from "./ingest/claude-code.ts";
 import { buildIntentLedger } from "./intent.ts";
 import { claudeAvailable } from "./judge/claude-cli.ts";
 import { buildOtherSessionIndex, traceProvenance } from "./provenance.ts";
 import { renderSession, type SessionReport } from "./report.ts";
+import { classifyScope } from "./scope.ts";
 import type { Session } from "./types.ts";
 
 interface Args {
@@ -65,6 +66,7 @@ function main() {
     process.exit(1);
   }
   const roots = worktreeRoots(root);
+  const repoPaths = git(root, ["ls-files"]).out.split("\n").filter(Boolean);
   // Sessions started in the main checkout or in any of its worktrees.
   const seen = new Set<string>();
   const refs = roots
@@ -153,7 +155,6 @@ function main() {
         const files = change.files;
         report.facts = extractFacts(files);
         report.provenance = traceProvenance(root, session, files, change.roots, othersFor(session));
-        report.flags = fileFlags(report.provenance, report.facts);
       }
     } catch (e) {
       report.error = (e as Error).message;
@@ -163,13 +164,25 @@ function main() {
     );
     report.ledger = buildIntentLedger(session, root, modelOk);
     totalCost += report.ledger.costUsd ?? 0;
+    if (report.provenance && report.facts) {
+      // Scope uses your prompts plus the intent ledger's task lines (which resolve "yes"/"do it" to what was proposed).
+      report.scope = classifyScope({
+        provenance: report.provenance,
+        prompts: session.prompts,
+        extraText: report.ledger.intents.filter((i) => i.kind === "task" && i.status === "active").map((i) => i.text),
+        roots,
+        repoPaths,
+      });
+      report.flags = fileFlags(report.provenance, report.facts, report.scope);
+    }
 
     const file = join(outDir, `${session.startedAt.slice(0, 10)}-${session.id.slice(0, 8)}.md`);
     writeFileSync(file, renderSession(report), "utf8");
     const undisclosed = [...report.flags.values()].filter((f) => f.includes("undisclosed")).length;
+    const against = [...report.flags.values()].filter((f) => f.includes("against-instruction")).length;
     const cov = report.provenance?.coverage;
     console.log(
-      `, ${report.ledger.intents.length} intents${report.ledger.error ? " (intent error)" : ""}, traced ${cov == null ? "n/a" : `${Math.round(cov * 100)}%`}${report.provenance?.viaBackups ? ` (${report.provenance.viaBackups} via backups)` : ""}${report.provenance?.otherSessionLines ? ` (+${report.provenance.otherSessionLines} lines from ${report.provenance.otherSessions.length} other session(s))` : ""}, tests: ${report.tests.evidence}, undisclosed files: ${undisclosed}`,
+      `, ${report.ledger.intents.length} intents${report.ledger.error ? " (intent error)" : ""}, traced ${cov == null ? "n/a" : `${Math.round(cov * 100)}%`}${report.provenance?.viaBackups ? ` (${report.provenance.viaBackups} via backups)` : ""}${report.provenance?.otherSessionLines ? ` (+${report.provenance.otherSessionLines} lines from ${report.provenance.otherSessions.length} other session(s))` : ""}, tests: ${report.tests.evidence}, undisclosed files: ${undisclosed}${against ? `, AGAINST YOUR INSTRUCTIONS: ${against}` : ""}`,
     );
     summary.push(
       `| ${session.startedAt.slice(0, 10)} | [${session.id.slice(0, 8)}](./${basename(file)}) | ${session.prompts.length} | ${session.edits.length} | ${report.ledger.intents.length} | ${cov == null ? "n/a" : `${Math.round(cov * 100)}%`} | ${report.tests.evidence} | ${undisclosed} |`,

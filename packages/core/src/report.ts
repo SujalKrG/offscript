@@ -4,6 +4,7 @@ import type { TestCheck } from "./checks.ts";
 import { type FileFlag, verdictForClaim } from "./checks.ts";
 import type { Facts } from "./facts.ts";
 import type { Provenance } from "./provenance.ts";
+import type { FileScope } from "./scope.ts";
 import type { IntentLedger, Session } from "./types.ts";
 
 export interface SessionReport {
@@ -15,9 +16,15 @@ export interface SessionReport {
   ledger: IntentLedger;
   tests: TestCheck;
   flags: Map<string, FileFlag[]>;
+  scope?: Map<string, FileScope>;
   error: string | null;
 }
 
+const scopeCell = (s: FileScope | undefined) => {
+  if (!s) return "-";
+  const base = `${s.kind}: ${esc(s.reason)}`;
+  return s.againstInstruction ? `${base}; you said: "${esc(s.againstInstruction.text)}" (prompt ${s.againstInstruction.prompt})` : base;
+};
 const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 const pct = (n: number | null) => (n === null ? "n/a" : `${Math.round(n * 100)}%`);
 
@@ -129,13 +136,21 @@ export function renderSession(r: SessionReport): string {
           .join(", ")}`,
       );
     L.push("");
-    L.push(`| file | status | +lines | traced | other sessions | written in turn(s) | user named it | agent mentioned it | flags |`);
+    L.push(`| file | status | +lines | traced | other sessions | written in turn(s) | scope | agent mentioned it | flags |`);
     L.push(`|---|---|---|---|---|---|---|---|---|`);
+    const scratch = p.files.filter((f) => r.scope?.get(f.path)?.kind === "scratch");
+    if (scratch.length) {
+      const dirs = [...new Set(scratch.map((f) => f.path.split("/").slice(0, -1).join("/") || "."))];
+      L.push(
+        `The agent left ${scratch.length} scratch file(s) in ${dirs.map((d) => `\`${d}/\``).join(", ")}: helper scripts and notes, not part of the change. Delete them or add the folder to .gitignore.`,
+      );
+      L.push("");
+    }
     const rows = [...p.files].sort((a, b) => (r.flags.get(b.path)?.length ?? 0) - (r.flags.get(a.path)?.length ?? 0));
     for (const f of rows.slice(0, 60)) {
       const flags = r.flags.get(f.path) ?? [];
       L.push(
-        `| \`${esc(f.path)}\` | ${f.status} | ${f.addedLines} | ${f.addedLines - f.otherSessionLines ? pct(f.attributedLines / (f.addedLines - f.otherSessionLines)) : "-"} | ${f.otherSessionLines || "-"} | ${f.turns.join(", ") || "-"} | ${f.inPrompts ? "yes" : "no"} | ${f.inAgentText ? "yes" : "no"} | ${flags.map((x) => (x === "undisclosed" ? "**undisclosed**" : x)).join(", ")} |`,
+        `| \`${esc(f.path)}\` | ${f.status} | ${f.addedLines} | ${f.addedLines - f.otherSessionLines ? pct(f.attributedLines / (f.addedLines - f.otherSessionLines)) : "-"} | ${f.otherSessionLines || "-"} | ${f.turns.join(", ") || "-"} | ${scopeCell(r.scope?.get(f.path))} | ${f.inAgentText ? "yes" : "no"} | ${flags.map((x) => (x === "undisclosed" || x === "against-instruction" ? `**${x}**` : x)).join(", ")} |`,
       );
     }
     if (rows.length > 60) L.push(`\n_${rows.length - 60} more files not shown._`);

@@ -10,6 +10,7 @@ import { buildIntentLedger } from "../src/intent.ts";
 import { buildOtherSessionIndex, traceProvenance } from "../src/provenance.ts";
 import { redact } from "../src/redact.ts";
 import { renderSession } from "../src/report.ts";
+import { classifyScope, pathWords } from "../src/scope.ts";
 import { buildFixture, fakeClaude } from "./fixture.ts";
 
 const fx = buildFixture();
@@ -77,10 +78,14 @@ describe("facts + provenance + checks", () => {
     expect(prov.coverage).toBeLessThan(1);
   });
 
-  test("flags: auth edit is undisclosed and sensitive", () => {
-    const flags = fileFlags(prov, facts);
-    expect(flags.get("src/auth/session.ts")).toEqual(expect.arrayContaining(["undisclosed", "sensitive"]));
+  test("flags: auth edit goes against 'Don't touch auth', is undisclosed and sensitive; the test for cart.ts is not flagged", () => {
+    const scope = classifyScope({ provenance: prov, prompts: s.prompts, roots: [root] });
+    const flags = fileFlags(prov, facts, scope);
+    expect(flags.get("src/auth/session.ts")).toEqual(expect.arrayContaining(["against-instruction", "undisclosed", "sensitive"]));
+    expect(scope.get("src/auth/session.ts")!.againstInstruction!.prompt).toBe(1);
     expect(flags.get("src/coupon.ts")).not.toContain("undisclosed");
+    expect(scope.get("tests/cart.test.ts")!.kind).toBe("anchor"); // "cart" is in your prompt
+    expect(flags.get("tests/cart.test.ts")).not.toContain("undisclosed");
   });
 
   test("test evidence: passed after last edit verifies a tests_pass claim", () => {
@@ -404,6 +409,149 @@ describe("code review fixes", () => {
   });
 });
 
+describe("scope (what was asked for vs drift)", () => {
+  const fs = require("node:fs") as typeof import("node:fs");
+  const fp = (path: string, o: Partial<import("../src/provenance.ts").FileProvenance> = {}) => ({
+    path,
+    status: "modified" as const,
+    addedLines: 5,
+    attributedLines: 5,
+    otherSessionLines: 0,
+    viaBackups: 0,
+    turns: [1],
+    touchedByAgent: true,
+    shellMentioned: false,
+    inPrompts: false,
+    inAgentText: false,
+    ...o,
+  });
+  const prov = (files: ReturnType<typeof fp>[]) =>
+    ({
+      files,
+      totalAddedLines: 0,
+      attributedLines: 0,
+      otherSessionLines: 0,
+      viaBackups: 0,
+      otherSessions: [],
+      coverage: 1,
+      editsOutsideRepo: 0,
+      agentFilesNotInDiff: [],
+    }) as import("../src/provenance.ts").Provenance;
+
+  test("path words drop generic segments and fold plurals", () => {
+    expect(pathWords("apps/driver-mobile/src/features/payments/AddMoneyCard.tsx")).toEqual(["driver", "payment", "money", "card"]);
+  });
+
+  test("a feature folder named by your request is in scope, with its siblings and tests (no undisclosed noise)", () => {
+    const p = prov([
+      fp("apps/driver/src/features/payments/api.ts"),
+      fp("apps/driver/src/features/payments/AddMoneyCard.tsx"),
+      fp("apps/driver/src/features/payments/paymentMachine.ts"),
+      fp("apps/driver/src/features/payments/paymentMachine.test.ts"),
+    ]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "we will be using payu as the payment gateway, integrate their sdk" }] });
+    for (const f of p.files) expect(scope.get(f.path)!.kind).not.toBe("drift");
+    expect(scope.get("apps/driver/src/features/payments/paymentMachine.test.ts")!.kind).toMatch(/anchor|related/);
+  });
+
+  test("an import one hop away from what you asked for is related, including @/ aliases", () => {
+    const repo = mkdtempSync(join(tmpdir(), "offscript-scope-"));
+    for (const d of ["api/src/modules/rides", "api/src/lib", "api/src/modules/pricing"]) fs.mkdirSync(join(repo, d), { recursive: true });
+    fs.writeFileSync(join(repo, "api/src/modules/rides/rides.service.ts"), "import { hashOtp } from '@/lib/otp';\nimport { fare } from '../pricing/fare';\n");
+    fs.writeFileSync(join(repo, "api/src/lib/otp.ts"), "export const hashOtp = () => 1;\n");
+    fs.writeFileSync(join(repo, "api/src/modules/pricing/fare.ts"), "export const fare = 1;\n");
+    const p = prov([fp("api/src/modules/rides/rides.service.ts", { inPrompts: true }), fp("api/src/lib/otp.ts"), fp("api/src/modules/pricing/fare.ts")]);
+    const scope = classifyScope({
+      provenance: p,
+      prompts: [{ index: 1, text: "in rides.service.ts the trip end pin is sometimes not generated" }],
+      roots: [repo],
+    });
+    expect(scope.get("api/src/modules/rides/rides.service.ts")!.kind).toBe("anchor");
+    expect(scope.get("api/src/lib/otp.ts")).toMatchObject({ kind: "related", reason: "imported by api/src/modules/rides/rides.service.ts" });
+    expect(scope.get("api/src/modules/pricing/fare.ts")).toMatchObject({ kind: "related", reason: "imported by api/src/modules/rides/rides.service.ts" });
+  });
+
+  test("a word that is everywhere in the repo (an app name) does not anchor files on its own", () => {
+    const repoPaths = [
+      ...Array.from({ length: 30 }, (_, i) => `apps/driver-mobile/src/screen${i}.tsx`),
+      ...Array.from({ length: 70 }, (_, i) => `api/src/x${i}.ts`),
+    ];
+    const p = prov([fp("apps/driver-mobile/src/features/payments/api.ts"), fp("apps/driver-mobile/src/legal/Terms.tsx")]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "driver app: switch the payment gateway to payu" }], repoPaths });
+    expect(scope.get("apps/driver-mobile/src/features/payments/api.ts")!.kind).toBe("anchor"); // "payment" is rare
+    expect(scope.get("apps/driver-mobile/src/legal/Terms.tsx")!.kind).toBe("drift"); // only "driver" matched
+  });
+
+  test("a sensitive file is not in scope just because it sits next to one that is", () => {
+    const p = prov([fp("infra/terraform/github-oidc.tf", { inAgentText: true }), fp("infra/terraform/ssm-observability.tf")]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "set up the S3 log archive" }] });
+    expect(scope.get("infra/terraform/ssm-observability.tf")!.kind).toBe("drift");
+    expect(fileFlags(p, extractFacts([]), scope).get("infra/terraform/ssm-observability.tf")).toContain("undisclosed");
+  });
+
+  test("helper scripts in a scratch folder are grouped as scratch, not flagged one by one as undisclosed", () => {
+    const p = prov([fp(".scratch/patch1.py"), fp(".scratch/qperf/chunk1.ts"), fp("api/src/x.ts")]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "tune the autoscaling" }] });
+    expect(scope.get(".scratch/patch1.py")!.kind).toBe("scratch");
+    const flags = fileFlags(p, extractFacts([]), scope);
+    expect(flags.get(".scratch/qperf/chunk1.ts")).toEqual(["scratch-file"]);
+  });
+
+  test("lockfiles, .gitignore and generated files are derived, never undisclosed", () => {
+    const p = prov([fp("load-tests/k6/.gitignore"), fp("bun.lock"), fp("apps/web/__generated__/graphql.ts")]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "prepare the lifecycle load test script" }] });
+    for (const f of p.files) expect(scope.get(f.path)!.kind).toBe("derived");
+  });
+
+  test("an unrelated file nobody asked for or mentioned is drift and flagged undisclosed", () => {
+    const p = prov([fp("apps/web/src/checkout/Cart.tsx"), fp("api/src/jobs/workers/notifications.worker.ts")]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "fix the cart total rounding" }] });
+    expect(scope.get("apps/web/src/checkout/Cart.tsx")!.kind).toBe("anchor");
+    expect(scope.get("api/src/jobs/workers/notifications.worker.ts")!.kind).toBe("drift");
+    const facts = extractFacts([]);
+    expect(fileFlags(p, facts, scope).get("api/src/jobs/workers/notifications.worker.ts")).toContain("undisclosed");
+  });
+
+  test("a file the agent told you about is not flagged, even if you did not ask for it", () => {
+    const p = prov([fp("api/src/jobs/workers/notifications.worker.ts", { inAgentText: true })]);
+    const scope = classifyScope({ provenance: p, prompts: [{ index: 1, text: "fix the cart total rounding" }] });
+    expect(scope.get("api/src/jobs/workers/notifications.worker.ts")).toMatchObject({ kind: "related", reason: "the agent told you about it" });
+  });
+
+  test("changing something you said not to touch is flagged against-instruction, even when the agent mentioned it", () => {
+    const p = prov([fp("api/src/payments/webhook.ts", { inAgentText: true }), fp("api/src/cart/total.ts")]);
+    const scope = classifyScope({
+      provenance: p,
+      prompts: [{ index: 2, text: "Fix the cart total rounding. Don't touch the payments code, it's live." }],
+    });
+    expect(scope.get("api/src/payments/webhook.ts")!.againstInstruction).toMatchObject({ prompt: 2 });
+    expect(scope.get("api/src/cart/total.ts")!.againstInstruction).toBeNull();
+    expect(fileFlags(p, extractFacts([]), scope).get("api/src/payments/webhook.ts")).toContain("against-instruction");
+  });
+
+  test("questions with 'not' are not prohibitions; real ones are", () => {
+    const p = prov([fp("api/src/payments/page.ts", { inAgentText: true })]);
+    for (const text of ["why is the payment page not changing?", "the payment page is not working, fix it"]) {
+      expect(classifyScope({ provenance: p, prompts: [{ index: 1, text }] }).get("api/src/payments/page.ts")!.againstInstruction).toBeNull();
+    }
+    for (const text of ["leave payments alone", "never modify the payment code", "keep payments as is"]) {
+      expect(classifyScope({ provenance: p, prompts: [{ index: 1, text }] }).get("api/src/payments/page.ts")!.againstInstruction).not.toBeNull();
+    }
+  });
+
+  test("words from a positive request win over the same word in a 'don't' sentence elsewhere", () => {
+    const p = prov([fp("api/src/payments/refund.ts")]);
+    const scope = classifyScope({
+      provenance: p,
+      prompts: [
+        { index: 1, text: "add partial refunds to payments" },
+        { index: 2, text: "don't touch payments config in prod" },
+      ],
+    });
+    expect(scope.get("api/src/payments/refund.ts")!.kind).toBe("anchor");
+  });
+});
+
 describe("worktrees", () => {
   test("lists sibling worktrees and maps their paths to repo-relative paths", () => {
     const f = buildFixture();
@@ -477,10 +625,23 @@ describe("report", () => {
         error: null,
       },
       tests: checkTests(s, root),
-      flags: fileFlags(provenance, facts),
+      flags: fileFlags(provenance, facts, classifyScope({ provenance, prompts: s.prompts, roots: [root] })),
+      scope: classifyScope({ provenance, prompts: s.prompts, roots: [root] }),
       error: null,
     });
-    for (const h of ["## 1.", "## 2.", "## 3.", "## 4.", "## 5.", "## 6.", "intents_correct (y/n):", "**undisclosed**", "[verified]"]) {
+    for (const h of [
+      "## 1.",
+      "## 2.",
+      "## 3.",
+      "## 4.",
+      "## 5.",
+      "## 6.",
+      "intents_correct (y/n):",
+      "**undisclosed**",
+      "**against-instruction**",
+      "anchor: named in your prompts",
+      "[verified]",
+    ]) {
       expect(md).toContain(h);
     }
     expect(md).not.toContain("FAKEFAKEFAKE");
