@@ -1,0 +1,248 @@
+// Verdicts: for each thing you asked for, did the agent do it? Evidence first, no model.
+//
+// Each intent gets a window of turns: its source prompts, plus the follow-up prompts after them
+// ("yes", "continue", "merge") until the next prompt that starts a different intent. Inside that
+// window we look for three kinds of independent evidence, never the agent's own summary:
+//   code     lines written in those turns that are still in the reviewed change
+//   actions  commands that ran in those turns (commit, push, PR, merge, tests, type check, build, deploy)
+//            and whether they succeeded
+//   answer   a substantive reply, for requests that only ask for information
+// When the evidence does not settle it, the verdict says so ("needs judgment") instead of guessing.
+
+import type { Provenance } from "./provenance.ts";
+import type { FileScope } from "./scope.ts";
+import type { Intent, Session, ShellRun } from "./types.ts";
+
+export type Verdict =
+  | "done" // the evidence the request calls for is there
+  | "partly done" // some of it is there, some is missing
+  | "failed" // it was attempted and the attempt failed (a command exited non-zero)
+  | "not done" // no evidence at all
+  | "not in change" // code was written, but none of it is in the reviewed change
+  | "answered" // an information request with a substantive reply
+  | "kept" // a constraint with no violation found
+  | "violated" // a constraint the agent broke
+  | "superseded" // you replaced this request with another
+  | "cancelled" // you dropped this request
+  | "needs judgment"; // evidence exists but cannot settle it
+
+export type ActionKind = "commit" | "push" | "pr" | "merge" | "tests" | "typecheck" | "build" | "deploy";
+
+export interface ActionEvidence {
+  kind: ActionKind;
+  status: "ok" | "failed" | "missing";
+  command: string | null;
+}
+
+export interface IntentVerdict {
+  id: string;
+  text: string;
+  verdict: Verdict;
+  why: string; // one line, plain words
+  turns: number[]; // prompt indices in this intent's window
+  files: string[]; // files with lines from these turns that are in the reviewed change
+  actions: ActionEvidence[];
+}
+
+export interface VerdictReport {
+  verdicts: IntentVerdict[];
+  extraFiles: string[]; // changed by the agent, linked to no request (scope drift)
+  counts: Partial<Record<Verdict, number>>;
+}
+
+/** What a request asks to be done, read from its wording. */
+const ACTION_ASKED: [ActionKind, RegExp][] = [
+  ["commit", /\bcommit/i],
+  ["push", /\bpush\b/i],
+  ["pr", /\b(pr|prs|pull requests?)\b/i],
+  ["merge", /\bmerg(e|ed|ing)\b/i],
+  ["tests", /\b(run|re-?run|execute)\b[^.]{0,40}\b(tests?|suite|e2e|smoke)\b|\btest (it|them|this|that)\b/i],
+  ["typecheck", /\b(tsc|type ?check)/i],
+  ["build", /\b(build|apk|aab|ipa)\b[^.]{0,30}\b(release|apk|aab|ipa|android|ios|prod)\b|\brelease build\b/i],
+  ["deploy", /\b(deploy|redeploy|ship it|push (it )?to prod(uction)?|roll ?out)\b/i],
+];
+
+/** Test runs of any kind: unit, e2e, emulator, browser, load. Wider than the "tests pass" claim check on purpose. */
+const TEST_RUN_RE =
+  /\b(k6\s+run|maestro\s+(test|cloud)|appium|playwright\s+test|detox\s+test|cypress\s+run|newman\s+run|artillery\s+run|locust\b|jest|vitest|pytest|go\s+test|phpunit|adb\s+shell\s+(am\s+instrument|input|monkey)|gradlew\s+\S*test|e2e|smoke)\b|\b(bun|npm|pnpm|yarn|npx)\s+(run\s+)?test|\b(node|bun|tsx|ts-node|deno\s+run|python3?|py)\s+\S*(test|e2e|smoke|load|lifecycle|probe|flow|scenario|qa|verify|check)\S*\.(c|m)?(js|ts|py)\b/i;
+
+/** Requests that are about getting information, read from their first word ("Analyze...", "Recommend..."). */
+const ANSWER_LEAD = new Set(
+  "analyze analyse research assess recommend report list investigate measure check verify explain draft determine find estimate review compare summarize summarise show tell inventory confirm figure evaluate audit identify plan outline describe answer advise decide explore".split(
+    " ",
+  ),
+);
+
+/** Drop "do not run X", "without deploying" and the like, so a prohibition is never read as a request to act. */
+function withoutNegations(text: string): string {
+  return text.replace(/\b(do not|don't|dont|never|no|without|not|avoid|until|before)\b[^.,;:]*/gi, " ");
+}
+
+/** What a command did. */
+const ACTION_RAN: Record<ActionKind, RegExp> = {
+  commit: /\bgit\b[^|;&]*\bcommit\b/i,
+  push: /\bgit\b[^|;&]*\bpush\b/i,
+  pr: /\bgh\s+pr\s+create\b|\bgh\s+api\b[^|;&]*\/pulls\b/i,
+  merge: /\bgh\s+pr\s+merge\b|\bgit\b[^|;&]*\bmerge\b/i,
+  tests: /$^/, // decided by ShellRun.isTest
+  typecheck: /\btsc\b|type-?check/i,
+  build: /\bgradlew\b|assemble(Release|Debug)|\beas\s+build\b|\bexpo\s+(build|export|run:android)|\b(bun|npm|pnpm|yarn)\s+(run\s+)?build\b/i,
+  deploy:
+    /\bvercel\b|\bdeploy\b|\bterraform\s+apply\b|\baws\s+(ecs|deploy|ssm\s+send-command|autoscaling\s+start-instance-refresh)\b|\bkubectl\s+(apply|rollout)\b|\bfly\s+deploy\b|\brailway\s+up\b|\bgh\s+workflow\s+run\b|\bgit\b[^|;&]*\bpush\b[^|;&]*\b(main|master|prod|production|release)\b|\bgh\s+pr\s+merge\b[^|;&]*--(squash|merge|rebase)\b[^|;&]*\b(main|master)\b/i, // CI/CD repos deploy on push or merge to main
+};
+
+/** Requests that need code to change, by their verb. */
+const CODE_VERB =
+  /\b(fix|add|implement|build|create|remove|delete|update|change|refactor|redesign|integrate|make|move|hide|support|replace|rename|extend|wire|hook up|migrate|bypass|stop|prevent|handle|show|display|clean ?up)\b/i;
+/** Requests that only ask for information. */
+const ANSWER_VERB =
+  /\b(report|explain|tell|draft|message|analy[sz]e|research|investigate|find out|figure out|check|verify|confirm|estimate|list|plan|review|why|what|how|compare|recommend|inventory|determine|show where|summari[sz]e)\b/i;
+
+export function intentWindows(intents: Intent[], promptCount: number): Map<string, number[]> {
+  const starts = new Set<number>();
+  for (const i of intents) for (const p of i.sourcePrompts) if (p > 0) starts.add(p);
+  const out = new Map<string, number[]>();
+  for (const i of intents) {
+    const turns = new Set<number>();
+    for (const s of i.sourcePrompts) {
+      if (s <= 0) continue;
+      turns.add(s);
+      for (let p = s + 1; p <= promptCount && !starts.has(p); p++) turns.add(p);
+    }
+    out.set(
+      i.id,
+      [...turns].sort((a, b) => a - b),
+    );
+  }
+  return out;
+}
+
+function actionEvidence(kind: ActionKind, shell: ShellRun[]): ActionEvidence {
+  const runs = shell.filter((r) => (kind === "tests" ? r.isTest || TEST_RUN_RE.test(r.command) : ACTION_RAN[kind].test(r.command)));
+  if (runs.length === 0) return { kind, status: "missing", command: null };
+  const ok = runs.filter((r) => r.failed === false || r.failed === null);
+  const last = (ok.length ? ok : runs)[(ok.length ? ok : runs).length - 1]!;
+  return { kind, status: ok.length ? "ok" : "failed", command: `${last.byUser ? "(you ran) " : ""}${last.command.slice(0, 120)}` };
+}
+
+export function judgeIntents(session: Session, intents: Intent[], provenance: Provenance | null, scope: Map<string, FileScope> | null): VerdictReport {
+  const windows = intentWindows(intents, session.prompts.length);
+  const verdicts: IntentVerdict[] = [];
+
+  for (const intent of intents) {
+    const turns = windows.get(intent.id) ?? [];
+    const inWindow = new Set(turns);
+    const base = { id: intent.id, text: intent.text, turns, files: [] as string[], actions: [] as ActionEvidence[] };
+
+    if (intent.status === "superseded") {
+      verdicts.push({ ...base, verdict: "superseded", why: `replaced by ${intent.supersededBy ?? "a later request"}` });
+      continue;
+    }
+    if (intent.status === "cancelled") {
+      verdicts.push({ ...base, verdict: "cancelled", why: "you dropped it" });
+      continue;
+    }
+
+    if (intent.kind !== "task") {
+      // Constraints and preferences: broken only when the agent changed something you said not to touch.
+      const broken = [...(scope ?? new Map<string, FileScope>())]
+        .filter(([, s]) => s.againstInstruction && (intent.sourcePrompts.includes(s.againstInstruction.prompt) || matchesConstraint(intent.text, s)))
+        .map(([p]) => p);
+      verdicts.push(
+        broken.length
+          ? { ...base, files: broken, verdict: "violated", why: `changed ${broken.length} file(s) you said not to touch` }
+          : { ...base, verdict: "kept", why: "no change found that breaks it" },
+      );
+      continue;
+    }
+
+    const shell = session.shell.filter((r) => inWindow.has(r.afterPrompt));
+    const edits = [...session.edits, ...(session.turnDeltas ?? [])].filter((e) => !e.failed && inWindow.has(e.afterPrompt));
+    const files = (provenance?.files ?? []).filter((f) => f.attributedLines > 0 && f.turns.some((t) => inWindow.has(t))).map((f) => f.path);
+    const lead =
+      intent.text
+        .trim()
+        .split(/\s+/)[0]
+        ?.toLowerCase()
+        .replace(/[^a-z]/g, "") ?? "";
+    const answerLead = ANSWER_LEAD.has(lead);
+    // Only the request's own wording counts (the quote can carry neighbouring sentences), minus prohibitions.
+    const asked = answerLead ? [] : ACTION_ASKED.filter(([, re]) => re.test(withoutNegations(intent.text))).map(([k]) => k);
+    const actions = asked.map((k) => actionEvidence(k, shell));
+    const answered = session.assistant.some((a) => inWindow.has(a.afterPrompt) && a.text.length >= 200);
+    const wantsCode = !answerLead && CODE_VERB.test(withoutNegations(intent.text));
+    const wantsAnswer = answerLead || ANSWER_VERB.test(intent.text);
+    const v = { ...base, files, actions };
+
+    const ok = actions.filter((a) => a.status === "ok").map((a) => a.kind);
+    const failed = actions.filter((a) => a.status === "failed").map((a) => a.kind);
+    const missing = actions.filter((a) => a.status === "missing").map((a) => a.kind);
+    const codeNote = files.length ? `; ${files.length} file(s) from these turns are in the change` : "";
+
+    if (actions.length) {
+      if (failed.length && !ok.length) verdicts.push({ ...v, verdict: "failed", why: `${failed.join(", ")} ran and failed${codeNote}` });
+      else if (!missing.length && !failed.length) verdicts.push({ ...v, verdict: "done", why: `${ok.join(", ")} ran and succeeded${codeNote}` });
+      else if (ok.length || files.length)
+        verdicts.push({
+          ...v,
+          verdict: "partly done",
+          why: `${[ok.length ? `done: ${ok.join(", ")}` : "", failed.length ? `failed: ${failed.join(", ")}` : "", missing.length ? `no sign of: ${missing.join(", ")}` : ""].filter(Boolean).join("; ")}${codeNote}`,
+        });
+      else {
+        // Show what did run, so you can judge a test or deploy that ran in a way we do not recognise.
+        const seen = [...new Set(shell.map((r) => `${r.byUser ? "(you) " : ""}${r.command.split("\n")[0]!.slice(0, 50)}`))].slice(0, 3);
+        verdicts.push({
+          ...v,
+          verdict: "not done",
+          why: `no sign of: ${missing.join(", ")}${seen.length ? `; commands seen: ${seen.join(" | ")}` : "; no commands ran in these turns"}`,
+        });
+      }
+      continue;
+    }
+
+    if (files.length) {
+      verdicts.push({ ...v, verdict: "done", why: `${files.length} file(s) changed in these turns are in the reviewed change (correctness not judged)` });
+    } else if (edits.length && wantsCode) {
+      verdicts.push({ ...v, verdict: "not in change", why: `${edits.length} edit(s) made in these turns, none of them in the reviewed change` });
+    } else if (wantsCode && !wantsAnswer) {
+      verdicts.push(
+        answered
+          ? { ...v, verdict: "needs judgment", why: "asked for a change, but only a reply was found; it may have been done outside this session" }
+          : { ...v, verdict: "not done", why: "asked for a change; no edits, commands or reply in these turns" },
+      );
+    } else if (answered) {
+      verdicts.push({
+        ...v,
+        verdict: wantsCode ? "needs judgment" : "answered",
+        why: wantsCode ? "a reply, but no code change for a request that may need one" : "a substantive reply in these turns",
+      });
+    } else if (edits.length || shell.length) {
+      verdicts.push({
+        ...v,
+        verdict: "needs judgment",
+        why: `activity in these turns (${edits.length} edit(s), ${shell.length} command(s)) but nothing that settles it`,
+      });
+    } else {
+      verdicts.push({ ...v, verdict: "not done", why: "no edits, commands or reply in these turns" });
+    }
+  }
+
+  const extraFiles = [...(scope ?? new Map<string, FileScope>())].filter(([, s]) => s.kind === "drift").map(([p]) => p);
+  const counts: Partial<Record<Verdict, number>> = {};
+  for (const v of verdicts) counts[v.verdict] = (counts[v.verdict] ?? 0) + 1;
+  return { verdicts, extraFiles, counts };
+}
+
+/** A constraint like "don't touch payments" matches a file flagged against-instruction by the same words. */
+function matchesConstraint(text: string, s: FileScope): boolean {
+  if (!s.againstInstruction) return false;
+  const words = (t: string) =>
+    new Set(
+      t
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((w) => w.length >= 4),
+    );
+  const a = words(text);
+  return [...words(s.againstInstruction.text)].some((w) => a.has(w));
+}

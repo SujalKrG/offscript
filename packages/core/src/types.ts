@@ -36,6 +36,7 @@ export interface ShellRun {
   isTest: boolean;
   failed: boolean | null; // null when no result was recorded
   timestamp?: string;
+  byUser?: boolean; // you ran it yourself with Claude Code's "!" shell, not the agent
   subagent?: string;
 }
 

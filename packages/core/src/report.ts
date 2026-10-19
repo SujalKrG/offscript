@@ -6,6 +6,7 @@ import type { Facts } from "./facts.ts";
 import type { Provenance } from "./provenance.ts";
 import type { FileScope } from "./scope.ts";
 import type { IntentLedger, Session } from "./types.ts";
+import type { VerdictReport } from "./verdicts.ts";
 
 export interface SessionReport {
   session: Session;
@@ -17,6 +18,7 @@ export interface SessionReport {
   tests: TestCheck;
   flags: Map<string, FileFlag[]>;
   scope?: Map<string, FileScope>;
+  verdicts?: VerdictReport;
   error: string | null;
 }
 
@@ -63,6 +65,31 @@ export function renderSession(r: SessionReport): string {
     }
   } else L.push(`_No intents extracted._`);
   L.push("");
+
+  // Verdicts
+  if (r.verdicts?.verdicts.length) {
+    const v = r.verdicts;
+    const order = ["done", "answered", "kept", "partly done", "needs judgment", "not in change", "failed", "not done", "violated", "superseded", "cancelled"];
+    const summary = order.filter((k) => v.counts[k as keyof typeof v.counts]).map((k) => `${v.counts[k as keyof typeof v.counts]} ${k}`);
+    L.push(`## 1b. Did it do what you asked? (verdicts from evidence, no model)`);
+    L.push("");
+    L.push(`${summary.join(" · ")}${v.extraFiles.length ? ` · plus ${v.extraFiles.length} file(s) changed that no request explains` : ""}`);
+    L.push("");
+    L.push(`| id | verdict | why | turns | files in change |`);
+    L.push(`|---|---|---|---|---|`);
+    const mark = (x: string) => (["not done", "failed", "violated", "not in change", "partly done"].includes(x) ? `**${x}**` : x);
+    for (const x of v.verdicts) {
+      const files = x.files.length
+        ? `${x.files
+            .slice(0, 4)
+            .map((f) => `\`${esc(f)}\``)
+            .join(", ")}${x.files.length > 4 ? ` +${x.files.length - 4}` : ""}`
+        : "-";
+      L.push(`| ${x.id} | ${mark(x.verdict)} | ${esc(x.why)} | ${x.turns.join(", ") || "-"} | ${files} |`);
+    }
+    if (v.extraFiles.length) L.push(`\nNot explained by any request: ${v.extraFiles.map((f) => `\`${esc(f)}\``).join(", ")}`);
+    L.push("");
+  }
 
   // Claims
   L.push(`## 2. What the agent claimed vs evidence`);

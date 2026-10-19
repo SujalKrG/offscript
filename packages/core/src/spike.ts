@@ -18,6 +18,7 @@ import { buildOtherSessionIndex, traceProvenance } from "./provenance.ts";
 import { renderSession, type SessionReport } from "./report.ts";
 import { classifyScope } from "./scope.ts";
 import type { Session } from "./types.ts";
+import { judgeIntents } from "./verdicts.ts";
 
 interface Args {
   repo: string;
@@ -175,6 +176,7 @@ function main() {
       });
       report.flags = fileFlags(report.provenance, report.facts, report.scope);
     }
+    if (report.ledger.intents.length) report.verdicts = judgeIntents(session, report.ledger.intents, report.provenance, report.scope ?? null);
 
     const file = join(outDir, `${session.startedAt.slice(0, 10)}-${session.id.slice(0, 8)}.md`);
     writeFileSync(file, renderSession(report), "utf8");
@@ -182,7 +184,13 @@ function main() {
     const against = [...report.flags.values()].filter((f) => f.includes("against-instruction")).length;
     const cov = report.provenance?.coverage;
     console.log(
-      `, ${report.ledger.intents.length} intents${report.ledger.error ? " (intent error)" : ""}, traced ${cov == null ? "n/a" : `${Math.round(cov * 100)}%`}${report.provenance?.viaBackups ? ` (${report.provenance.viaBackups} via backups)` : ""}${report.provenance?.otherSessionLines ? ` (+${report.provenance.otherSessionLines} lines from ${report.provenance.otherSessions.length} other session(s))` : ""}, tests: ${report.tests.evidence}, undisclosed files: ${undisclosed}${against ? `, AGAINST YOUR INSTRUCTIONS: ${against}` : ""}`,
+      `, ${report.ledger.intents.length} intents${report.ledger.error ? " (intent error)" : ""}, traced ${cov == null ? "n/a" : `${Math.round(cov * 100)}%`}${report.provenance?.viaBackups ? ` (${report.provenance.viaBackups} via backups)` : ""}${report.provenance?.otherSessionLines ? ` (+${report.provenance.otherSessionLines} lines from ${report.provenance.otherSessions.length} other session(s))` : ""}, ${
+        report.verdicts
+          ? `verdicts: ${Object.entries(report.verdicts.counts)
+              .map(([k, n]) => `${n} ${k}`)
+              .join(", ")}, `
+          : ""
+      }tests: ${report.tests.evidence}, undisclosed files: ${undisclosed}${against ? `, AGAINST YOUR INSTRUCTIONS: ${against}` : ""}`,
     );
     summary.push(
       `| ${session.startedAt.slice(0, 10)} | [${session.id.slice(0, 8)}](./${basename(file)}) | ${session.prompts.length} | ${session.edits.length} | ${report.ledger.intents.length} | ${cov == null ? "n/a" : `${Math.round(cov * 100)}%`} | ${report.tests.evidence} | ${undisclosed} |`,

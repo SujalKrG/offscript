@@ -11,6 +11,7 @@ import { buildOtherSessionIndex, traceProvenance } from "../src/provenance.ts";
 import { redact } from "../src/redact.ts";
 import { renderSession } from "../src/report.ts";
 import { classifyScope, pathWords } from "../src/scope.ts";
+import { intentWindows, judgeIntents } from "../src/verdicts.ts";
 import { buildFixture, fakeClaude } from "./fixture.ts";
 
 const fx = buildFixture();
@@ -549,6 +550,199 @@ describe("scope (what was asked for vs drift)", () => {
       ],
     });
     expect(scope.get("api/src/payments/refund.ts")!.kind).toBe("anchor");
+  });
+});
+
+describe("verdicts (did it do what you asked?)", () => {
+  type I = import("../src/types.ts").Intent;
+  const intent = (id: string, text: string, sourcePrompts: number[], o: Partial<I> = {}): I => ({
+    id,
+    text,
+    kind: "task",
+    sourcePrompts,
+    quote: "",
+    status: "active",
+    supersededBy: null,
+    ...o,
+  });
+
+  test("end to end on the fixture: code landed, constraint violated, test run verified", () => {
+    const s = parseSession(fx.transcript);
+    const change = sessionChange(root, s)!;
+    const prov = traceProvenance(root, s, change.files, change.roots);
+    const scope = classifyScope({ provenance: prov, prompts: s.prompts, roots: [root] });
+    const r = judgeIntents(
+      s,
+      [
+        intent("I1", "Add a discount parameter to total() and a coupon helper", [1]),
+        intent("C1", "Do not touch auth", [1], { kind: "constraint" }),
+        intent("I2", "Fix the failing tests and run the tests again", [2]),
+      ],
+      prov,
+      scope,
+    );
+    const by = new Map(r.verdicts.map((v) => [v.id, v]));
+    expect(by.get("I1")!.verdict).toBe("done");
+    expect(by.get("I1")!.files).toEqual(expect.arrayContaining(["src/cart.ts", "src/coupon.ts"]));
+    expect(by.get("C1")!.verdict).toBe("violated");
+    expect(by.get("C1")!.files).toEqual(["src/auth/session.ts"]);
+    expect(by.get("I2")!.verdict).toBe("done");
+    expect(by.get("I2")!.actions).toEqual([expect.objectContaining({ kind: "tests", status: "ok" })]);
+    expect(r.extraFiles).toContain("src/auth/session.ts");
+  });
+
+  // A small hand-built session for the action verdicts.
+  const session = (shell: { p: number; cmd: string; failed?: boolean }[], assistant: { p: number; text: string }[] = [], prompts = 4) =>
+    ({
+      ...parseSession(fx.transcript),
+      prompts: Array.from({ length: prompts }, (_, i) => ({ index: i + 1, uuid: "", timestamp: "", text: "" })),
+      edits: [],
+      turnDeltas: [],
+      shell: shell.map((x, i) => ({ seq: i + 1, afterPrompt: x.p, toolUseId: "", command: x.cmd, isTest: /\btest\b/.test(x.cmd), failed: x.failed ?? false })),
+      assistant: assistant.map((a) => ({ afterPrompt: a.p, uuid: "", timestamp: "", text: a.text })),
+    }) as import("../src/types.ts").Session;
+
+  test("follow-up prompts like 'merge' belong to the request before them", () => {
+    const w = intentWindows([intent("I1", "commit and open a PR", [1]), intent("I2", "fix the footer", [3])], 4);
+    expect(w.get("I1")).toEqual([1, 2]);
+    expect(w.get("I2")).toEqual([3, 4]);
+  });
+
+  test("commit ran but no PR was opened: partly done, and says what is missing", () => {
+    const r = judgeIntents(
+      session([{ p: 1, cmd: "git add -A && git commit -m x" }]),
+      [intent("I1", "Commit the fix and open a PR to develop", [1])],
+      null,
+      null,
+    );
+    expect(r.verdicts[0]).toMatchObject({ verdict: "partly done" });
+    expect(r.verdicts[0]!.why).toContain("no sign of: pr");
+  });
+
+  test("everything asked ran and succeeded: done", () => {
+    const r = judgeIntents(
+      session([
+        { p: 1, cmd: "git commit -m x" },
+        { p: 1, cmd: "git push -u origin fix/x" },
+        { p: 2, cmd: "gh pr create --base develop" },
+        { p: 2, cmd: "gh pr merge 42 --squash" },
+      ]),
+      [intent("I1", "Commit, push, open a PR to develop and merge it", [1])],
+      null,
+      null,
+    );
+    expect(r.verdicts[0]!.verdict).toBe("done");
+  });
+
+  test("a push to main counts as a deploy in repos that deploy from CI", () => {
+    const r = judgeIntents(session([{ p: 1, cmd: "git push origin main" }]), [intent("I1", "Deploy the stop changes to production", [1])], null, null);
+    expect(r.verdicts[0]!.verdict).toBe("done");
+  });
+
+  test("k6, emulator and node test scripts count as test runs", () => {
+    for (const cmd of [
+      "k6 run load-tests/k6/lifecycle.js",
+      "maestro test flows/rider.yaml",
+      "npx playwright test",
+      "node load-tests/evidence/lifecycle.js --vus 1",
+    ]) {
+      const r = judgeIntents(session([{ p: 1, cmd }]), [intent("I1", "Run the one-user lifecycle test and report the metrics", [1])], null, null);
+      expect(r.verdicts[0]!.actions[0]).toMatchObject({ kind: "tests", status: "ok" });
+    }
+  });
+
+  test("a prohibition is not a request to act; an information request needs no action", () => {
+    const long = "Here is what is missing: ".padEnd(260, "x");
+    const r = judgeIntents(
+      session(
+        [],
+        [
+          { p: 1, text: long },
+          { p: 2, text: long },
+          { p: 3, text: long },
+        ],
+      ),
+      [
+        intent("I1", "Start filling the load-test gaps with lifecycle.js, and do not run any load tests yet", [1]),
+        intent("I2", "Recommend how to run the load tests with the client to pick an instance family", [2]),
+        intent("I3", "Analyze which flows lack coverage and list what to add", [3]),
+      ],
+      null,
+      null,
+    );
+    expect(r.verdicts[0]!.actions).toEqual([]);
+    expect(r.verdicts.slice(1).map((x) => x.verdict)).toEqual(["answered", "answered"]);
+  });
+
+  test("'get access to production' is not a deploy request", () => {
+    const r = judgeIntents(session([]), [intent("I1", "Get read access to production DB and cache so metrics can be collected", [1])], null, null);
+    expect(r.verdicts[0]!.actions.map((a) => a.kind)).not.toContain("deploy");
+  });
+
+  test("commands you ran yourself with '!' count as evidence and are not prompts", () => {
+    const { appendFileSync } = require("node:fs") as typeof import("node:fs");
+    const f = buildFixture();
+    const add = (text: string) =>
+      appendFileSync(
+        f.transcript,
+        `${JSON.stringify({ type: "user", sessionId: f.sessionId, timestamp: new Date().toISOString(), origin: { kind: "human" }, message: { role: "user", content: text } })}\n`,
+      );
+    add("run the lifecycle load test for one user");
+    add("<bash-input>k6 run load-tests/k6/lifecycle.js --vus 1</bash-input>");
+    add("<bash-stdout>checks.....: 100.00%</bash-stdout><bash-stderr></bash-stderr>");
+    const s = parseSession(f.transcript);
+    expect(s.prompts.map((p) => p.text)).not.toContain("<bash-input>k6 run load-tests/k6/lifecycle.js --vus 1</bash-input>");
+    const own = s.shell.find((r) => r.byUser)!;
+    expect(own).toMatchObject({ command: "k6 run load-tests/k6/lifecycle.js --vus 1", failed: false, afterPrompt: 3 });
+    const r = judgeIntents(s, [intent("I1", "Run the lifecycle load test for one user", [3])], null, null);
+    expect(r.verdicts[0]!.verdict).toBe("done");
+    expect(r.verdicts[0]!.actions[0]!.command).toContain("(you ran)");
+  });
+
+  test("a test request with no recognised test run lists the commands that did run", () => {
+    const r = judgeIntents(
+      session([{ p: 1, cmd: "adb devices && ./scripts/sos-flow.sh" }]),
+      [intent("I1", "Run the payments and rider SOS flow tests", [1])],
+      null,
+      null,
+    );
+    expect(r.verdicts[0]!.verdict).toBe("not done");
+    expect(r.verdicts[0]!.why).toContain("commands seen: adb devices && ./scripts/sos-flow.sh");
+  });
+
+  test("the only merge attempt failed: failed", () => {
+    const r = judgeIntents(session([{ p: 1, cmd: "gh pr merge 42", failed: true }]), [intent("I1", "Merge the PR into main", [1])], null, null);
+    expect(r.verdicts[0]!.verdict).toBe("failed");
+  });
+
+  test("an information request with a real reply is answered; a change request with nothing is not done", () => {
+    const long = "The 403 comes from the role middleware: ".padEnd(260, "x");
+    const r = judgeIntents(
+      session([], [{ p: 1, text: long }]),
+      [intent("I1", "Investigate why the status endpoint returns 403", [1]), intent("I2", "Fix the receipt page error message", [3])],
+      null,
+      null,
+    );
+    expect(r.verdicts.map((v) => v.verdict)).toEqual(["answered", "not done"]);
+  });
+
+  test("superseded and cancelled requests are labelled, not judged", () => {
+    const r = judgeIntents(
+      session([]),
+      [intent("I1", "Do not run load tests", [1], { status: "superseded", supersededBy: "I2" }), intent("I3", "Finish item 1", [2], { status: "cancelled" })],
+      null,
+      null,
+    );
+    expect(r.verdicts.map((v) => v.verdict)).toEqual(["superseded", "cancelled"]);
+  });
+
+  test("code written for a request but missing from the change: not in change", () => {
+    const s = session([]);
+    s.edits = [
+      { seq: 1, afterPrompt: 1, toolUseId: "", tool: "Edit", filePath: "/x/a.ts", addedLines: ["x"], removedLines: [], kind: "update", failed: false },
+    ];
+    const r = judgeIntents(s, [intent("I1", "Fix the cart rounding bug", [1])], null, null);
+    expect(r.verdicts[0]!.verdict).toBe("not in change");
   });
 });
 

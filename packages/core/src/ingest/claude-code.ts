@@ -327,6 +327,32 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
       compactions++;
       continue;
     }
+    // "!" commands you ran yourself: evidence of what was run, not a request to the agent.
+    const bash = /^<bash-input>([\s\S]*?)<\/bash-input>/.exec(cleaned);
+    if (bash) {
+      const command = bash[1]!.trim();
+      shell.push({
+        seq: ++seq,
+        afterPrompt: prompts.length,
+        toolUseId: "",
+        command: red(command),
+        isTest: TEST_COMMAND_RE.test(command),
+        failed: null,
+        timestamp: rec.timestamp ?? "",
+        byUser: true,
+      });
+      continue;
+    }
+    if (/^<bash-(stdout|stderr)>/.test(cleaned)) {
+      // Output of your own "!" command: mark it failed when only an error came back.
+      const last = [...shell].reverse().find((r) => r.byUser);
+      if (last && last.failed === null) {
+        const out = /<bash-stdout>([\s\S]*?)<\/bash-stdout>/.exec(cleaned)?.[1]?.trim() ?? "";
+        const err = /<bash-stderr>([\s\S]*?)<\/bash-stderr>/.exec(cleaned)?.[1]?.trim() ?? "";
+        last.failed = !out && /error|not found|no such file|denied|failed/i.test(err);
+      }
+      continue;
+    }
     if (NOISE_PREFIXES.some((p) => cleaned.startsWith(p))) continue;
     prompts.push({ index: prompts.length + 1, uuid: rec.uuid ?? "", timestamp: rec.timestamp ?? "", text: red(cleaned) });
   }
