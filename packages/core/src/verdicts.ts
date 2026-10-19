@@ -20,7 +20,8 @@ export type Verdict =
   | "not done" // no evidence at all
   | "not in change" // code was written, but none of it is in the reviewed change
   | "answered" // an information request with a substantive reply
-  | "kept" // a constraint with no violation found
+  | "kept" // a "don't touch" constraint, and nothing it covers was changed
+  | "not checked" // a constraint offscript cannot check from files (e.g. "use bun, not npm")
   | "violated" // a constraint the agent broke
   | "superseded" // you replaced this request with another
   | "cancelled" // you dropped this request
@@ -30,7 +31,7 @@ export type ActionKind = "commit" | "push" | "pr" | "merge" | "tests" | "typeche
 
 export interface ActionEvidence {
   kind: ActionKind;
-  status: "ok" | "failed" | "missing";
+  status: "ok" | "failed" | "unknown" | "missing"; // unknown: it ran, but no result was recorded
   command: string | null;
 }
 
@@ -50,21 +51,42 @@ export interface VerdictReport {
   counts: Partial<Record<Verdict, number>>;
 }
 
-/** What a request asks to be done, read from its wording. */
+/**
+ * What a request asks to be done. An action counts only when it is asked for as an action: the request starts
+ * with it ("Commit and push...") or chains it ("..., then open a PR"). Nouns do not count: "push notifications",
+ * "commit message", "merge conflict" are not requests to push, commit or merge.
+ */
 const ACTION_ASKED: [ActionKind, RegExp][] = [
-  ["commit", /\bcommit/i],
-  ["push", /\bpush\b/i],
+  ["commit", /\bcommit\b(?!\s+(message|messages|hash|history|log|lint))/i],
+  ["push", /\bpush\b(?!\s+(notification|notifications|token|tokens|service|alert|alerts|message|messages))/i],
   ["pr", /\b(pr|prs|pull requests?)\b/i],
-  ["merge", /\bmerg(e|ed|ing)\b/i],
-  ["tests", /\b(run|re-?run|execute)\b[^.]{0,40}\b(tests?|suite|e2e|smoke)\b|\btest (it|them|this|that)\b/i],
+  ["merge", /\bmerg(e|ed|ing)\b(?!\s+(conflict|conflicts|request|requests|sort|base))/i],
+  ["tests", /\b(run|re-?run|execute)\b[^.]{0,40}\b(tests?|suite|e2e|smoke|checklist|cases?)\b|^test\b/i],
   ["typecheck", /\b(tsc|type ?check)/i],
   ["build", /\b(build|apk|aab|ipa)\b[^.]{0,30}\b(release|apk|aab|ipa|android|ios|prod)\b|\brelease build\b/i],
   ["deploy", /\b(deploy|redeploy|ship it|push (it )?to prod(uction)?|roll ?out)\b/i],
 ];
+/** Words a clause starts with when it asks for an action. */
+const ACTION_LEAD = new Set("commit push merge deploy redeploy open create raise send run rerun re-run execute build ship release test pr roll".split(" "));
 
-/** Test runs of any kind: unit, e2e, emulator, browser, load. Wider than the "tests pass" claim check on purpose. */
+/** The actions a request asks for: only clauses that start with an action verb ("Commit and push...", "..., then open a PR"). */
+function actionsAsked(text: string): ActionKind[] {
+  const out = new Set<ActionKind>();
+  // "and" starts a new clause only when an action verb follows it: "commit and push" splits, "payments and SOS tests" does not.
+  const leads = [...ACTION_LEAD].join("|");
+  const splitter = new RegExp(`,|;|\\.|\\bthen\\b|\\b(?:and|also|plus)\\b(?=\\s+(?:please\\s+)?(?:${leads})\\b)`, "i");
+  for (const clause of withoutNegations(text).split(splitter)) {
+    const c = clause.trim().replace(/^(please|now|finally|next)\s+/i, "");
+    const lead = c.split(/\s+/)[0]?.toLowerCase() ?? "";
+    if (!ACTION_LEAD.has(lead)) continue;
+    for (const [k, re] of ACTION_ASKED) if (re.test(c)) out.add(k);
+  }
+  return [...out];
+}
+
+/** Test runs: a real runner or a test-named script, not any command that mentions "e2e". */
 const TEST_RUN_RE =
-  /\b(k6\s+run|maestro\s+(test|cloud)|appium|playwright\s+test|detox\s+test|cypress\s+run|newman\s+run|artillery\s+run|locust\b|jest|vitest|pytest|go\s+test|phpunit|adb\s+shell\s+(am\s+instrument|input|monkey)|gradlew\s+\S*test|e2e|smoke)\b|\b(bun|npm|pnpm|yarn|npx)\s+(run\s+)?test|\b(node|bun|tsx|ts-node|deno\s+run|python3?|py)\s+\S*(test|e2e|smoke|load|lifecycle|probe|flow|scenario|qa|verify|check)\S*\.(c|m)?(js|ts|py)\b/i;
+  /\b(k6\s+run|maestro\s+(test|cloud)|appium\b|playwright\s+test|detox\s+test|cypress\s+run|newman\s+run|artillery\s+run|locust\s|jest\b|vitest\b|pytest\b|go\s+test\b|phpunit\b|adb\s+shell\s+(am\s+instrument|input|monkey)|gradlew\s+\S*test)|\b(bun|npm|pnpm|yarn|npx)\s+(run\s+)?(test|e2e|smoke)\b|\b(node|bun|tsx|ts-node|deno\s+run|python3?|py)\s+\S*(test|e2e|smoke|load|lifecycle|probe|flow|scenario|qa|verify)\S*\.(c|m)?(js|ts|py)\b/i;
 
 /** Requests that are about getting information, read from their first word ("Analyze...", "Recommend..."). */
 const ANSWER_LEAD = new Set(
@@ -72,23 +94,30 @@ const ANSWER_LEAD = new Set(
     " ",
   ),
 );
+/** Requests that need code to change, read from their first word. */
+const CODE_LEAD = new Set(
+  "fix add implement create remove delete update change refactor redesign integrate make move hide support replace rename extend wire migrate bypass stop prevent handle display clean cleanup write convert improve polish restyle tune optimize enable disable allow block let set".split(
+    " ",
+  ),
+);
 
-/** Drop "do not run X", "without deploying" and the like, so a prohibition is never read as a request to act. */
+/** Remove a prohibition ("do not run load tests", "without deploying") up to the next clause, so it is never read as a request. */
 function withoutNegations(text: string): string {
-  return text.replace(/\b(do not|don't|dont|never|no|without|not|avoid|until|before)\b[^.,;:]*/gi, " ");
+  return text.replace(/\b(do not|don't|dont|never|without|avoid|no need to)\b.*?(?=,|;|\.|\band\b|\bthen\b|\bbut\b|$)/gi, " ");
 }
 
-/** What a command did. */
+/** What a command did. Matched on the command itself, not on file names that happen to contain the word. */
 const ACTION_RAN: Record<ActionKind, RegExp> = {
-  commit: /\bgit\b[^|;&]*\bcommit\b/i,
-  push: /\bgit\b[^|;&]*\bpush\b/i,
-  pr: /\bgh\s+pr\s+create\b|\bgh\s+api\b[^|;&]*\/pulls\b/i,
-  merge: /\bgh\s+pr\s+merge\b|\bgit\b[^|;&]*\bmerge\b/i,
-  tests: /$^/, // decided by ShellRun.isTest
-  typecheck: /\btsc\b|type-?check/i,
-  build: /\bgradlew\b|assemble(Release|Debug)|\beas\s+build\b|\bexpo\s+(build|export|run:android)|\b(bun|npm|pnpm|yarn)\s+(run\s+)?build\b/i,
+  commit: /\bgit\s+(-[^\s]+\s+(\S+\s+)?)*commit\b/i,
+  push: /\bgit\s+(-[^\s]+\s+(\S+\s+)?)*push\b/i,
+  pr: /\bgh\s+pr\s+create\b|\bgh\s+api\b[^|;&]*\/pulls\b(?![^|;&]*\/merge)/i,
+  merge: /\bgh\s+pr\s+merge\b|\bgit\s+(-[^\s]+\s+(\S+\s+)?)*merge\s+(?!-base\b)/i,
+  tests: /$^/, // decided by ShellRun.isTest or TEST_RUN_RE
+  typecheck: /\btsc\b(?!\S)|\b(bun|npm|pnpm|yarn)\s+(run\s+)?type-?check\b/i,
+  build:
+    /\bgradlew\b[^|;&]*assemble|\bassemble(Release|Debug)\b|\beas\s+build\b|\bexpo\s+(build|export|run:android)\b|\b(bun|npm|pnpm|yarn)\s+(run\s+)?build\b/i,
   deploy:
-    /\bvercel\b|\bdeploy\b|\bterraform\s+apply\b|\baws\s+(ecs|deploy|ssm\s+send-command|autoscaling\s+start-instance-refresh)\b|\bkubectl\s+(apply|rollout)\b|\bfly\s+deploy\b|\brailway\s+up\b|\bgh\s+workflow\s+run\b|\bgit\b[^|;&]*\bpush\b[^|;&]*\b(main|master|prod|production|release)\b|\bgh\s+pr\s+merge\b[^|;&]*--(squash|merge|rebase)\b[^|;&]*\b(main|master)\b/i, // CI/CD repos deploy on push or merge to main
+    /\bvercel\s+(deploy|--prod|-p\b)|\bvercel\b\s*$|\b(bun|npm|pnpm|yarn)\s+(run\s+)?deploy\b|\bterraform\s+apply\b|\baws\s+(ecs\s+update-service|deploy\s|ssm\s+send-command|autoscaling\s+start-instance-refresh)|\bkubectl\s+(apply|rollout)\b|\bfly\s+deploy\b|\brailway\s+up\b|\bgh\s+workflow\s+run\b|\bgit\s+(-[^\s]+\s+(\S+\s+)?)*push\b[^|;&]*\b(main|master|prod|production|release)\b|\bgh\s+pr\s+merge\b[^|;&]*\b(main|master)\b/i, // CI/CD repos deploy on push or merge to main
 };
 
 /** Requests that need code to change, by their verb. */
@@ -120,10 +149,16 @@ export function intentWindows(intents: Intent[], promptCount: number): Map<strin
 function actionEvidence(kind: ActionKind, shell: ShellRun[]): ActionEvidence {
   const runs = shell.filter((r) => (kind === "tests" ? r.isTest || TEST_RUN_RE.test(r.command) : ACTION_RAN[kind].test(r.command)));
   if (runs.length === 0) return { kind, status: "missing", command: null };
-  const ok = runs.filter((r) => r.failed === false || r.failed === null);
-  const last = (ok.length ? ok : runs)[(ok.length ? ok : runs).length - 1]!;
-  return { kind, status: ok.length ? "ok" : "failed", command: `${last.byUser ? "(you ran) " : ""}${last.command.slice(0, 120)}` };
+  // The last attempt decides (a retry that succeeded fixes an earlier failure); a run with no recorded result proves nothing.
+  const last = runs[runs.length - 1]!;
+  const earlierFailures = runs.slice(0, -1).filter((r) => r.failed === true).length;
+  const status = last.failed === false ? "ok" : last.failed === true ? "failed" : "unknown";
+  const note = earlierFailures && status === "ok" ? ` (after ${earlierFailures} failed attempt(s))` : "";
+  return { kind, status, command: `${last.byUser ? "(you ran) " : ""}${last.command.slice(0, 120)}${note}` };
 }
+
+/** Constraints offscript can check from the change: ones about not touching, changing or removing something. */
+const FILE_CONSTRAINT = /\b(touch|change|modify|edit|leave|delete|remove|rename|alter|keep)\b|\bdo not (add|create)\b/i;
 
 export function judgeIntents(session: Session, intents: Intent[], provenance: Provenance | null, scope: Map<string, FileScope> | null): VerdictReport {
   const windows = intentWindows(intents, session.prompts.length);
@@ -145,14 +180,12 @@ export function judgeIntents(session: Session, intents: Intent[], provenance: Pr
 
     if (intent.kind !== "task") {
       // Constraints and preferences: broken only when the agent changed something you said not to touch.
-      const broken = [...(scope ?? new Map<string, FileScope>())]
-        .filter(([, s]) => s.againstInstruction && (intent.sourcePrompts.includes(s.againstInstruction.prompt) || matchesConstraint(intent.text, s)))
-        .map(([p]) => p);
-      verdicts.push(
-        broken.length
-          ? { ...base, files: broken, verdict: "violated", why: `changed ${broken.length} file(s) you said not to touch` }
-          : { ...base, verdict: "kept", why: "no change found that breaks it" },
-      );
+      // A file counts against this constraint only when the constraint's own words match the instruction it broke,
+      // so two constraints from one prompt are judged separately.
+      const broken = [...(scope ?? new Map<string, FileScope>())].filter(([, s]) => matchesConstraint(intent.text, s)).map(([p]) => p);
+      if (broken.length) verdicts.push({ ...base, files: broken, verdict: "violated", why: `changed ${broken.length} file(s) you said not to touch` });
+      else if (FILE_CONSTRAINT.test(intent.text)) verdicts.push({ ...base, verdict: "kept", why: "nothing it covers was changed" });
+      else verdicts.push({ ...base, verdict: "not checked", why: "not something offscript can check from the files that changed" });
       continue;
     }
 
@@ -167,26 +200,40 @@ export function judgeIntents(session: Session, intents: Intent[], provenance: Pr
         .replace(/[^a-z]/g, "") ?? "";
     const answerLead = ANSWER_LEAD.has(lead);
     // Only the request's own wording counts (the quote can carry neighbouring sentences), minus prohibitions.
-    const asked = answerLead ? [] : ACTION_ASKED.filter(([, re]) => re.test(withoutNegations(intent.text))).map(([k]) => k);
+    const asked = answerLead ? [] : actionsAsked(intent.text);
     const actions = asked.map((k) => actionEvidence(k, shell));
-    const answered = session.assistant.some((a) => inWindow.has(a.afterPrompt) && a.text.length >= 200);
-    const wantsCode = !answerLead && CODE_VERB.test(withoutNegations(intent.text));
+    // A reply counts as an answer when it closes the request's turns, not when it is progress narration along the way.
+    const replies = session.assistant.filter((a) => inWindow.has(a.afterPrompt));
+    const closing = replies[replies.length - 1];
+    const answered = !!closing && closing.text.length >= 200;
+    const wantsCode = !answerLead && (CODE_LEAD.has(lead) || (!asked.length && CODE_VERB.test(withoutNegations(intent.text))));
     const wantsAnswer = answerLead || ANSWER_VERB.test(intent.text);
     const v = { ...base, files, actions };
 
     const ok = actions.filter((a) => a.status === "ok").map((a) => a.kind);
+    const unknown = actions.filter((a) => a.status === "unknown").map((a) => a.kind);
     const failed = actions.filter((a) => a.status === "failed").map((a) => a.kind);
     const missing = actions.filter((a) => a.status === "missing").map((a) => a.kind);
     const codeNote = files.length ? `; ${files.length} file(s) from these turns are in the change` : "";
 
     if (actions.length) {
       if (failed.length && !ok.length) verdicts.push({ ...v, verdict: "failed", why: `${failed.join(", ")} ran and failed${codeNote}` });
-      else if (!missing.length && !failed.length) verdicts.push({ ...v, verdict: "done", why: `${ok.join(", ")} ran and succeeded${codeNote}` });
-      else if (ok.length || files.length)
+      else if (!missing.length && !failed.length && !unknown.length && wantsCode && !files.length)
+        // "Fix X and commit it": the commit ran, but none of the code from these turns is in the change.
+        verdicts.push({ ...v, verdict: "partly done", why: `${ok.join(", ")} ran and succeeded, but no code from these turns is in the reviewed change` });
+      else if (!missing.length && !failed.length && !unknown.length)
+        verdicts.push({ ...v, verdict: "done", why: `${ok.join(", ")} ran and succeeded${codeNote}` });
+      else if (!missing.length && !failed.length)
+        verdicts.push({
+          ...v,
+          verdict: "needs judgment",
+          why: `${unknown.join(", ")} ran but no result was recorded${ok.length ? `; ok: ${ok.join(", ")}` : ""}${codeNote}`,
+        });
+      else if (ok.length || files.length || unknown.length)
         verdicts.push({
           ...v,
           verdict: "partly done",
-          why: `${[ok.length ? `done: ${ok.join(", ")}` : "", failed.length ? `failed: ${failed.join(", ")}` : "", missing.length ? `no sign of: ${missing.join(", ")}` : ""].filter(Boolean).join("; ")}${codeNote}`,
+          why: `${[ok.length ? `done: ${ok.join(", ")}` : "", failed.length ? `failed: ${failed.join(", ")}` : "", unknown.length ? `no result recorded: ${unknown.join(", ")}` : "", missing.length ? `no sign of: ${missing.join(", ")}` : ""].filter(Boolean).join("; ")}${codeNote}`,
         });
       else {
         // Show what did run, so you can judge a test or deploy that ran in a way we do not recognise.
@@ -233,6 +280,13 @@ export function judgeIntents(session: Session, intents: Intent[], provenance: Pr
   return { verdicts, extraFiles, counts };
 }
 
+/** Words every "don't touch" sentence shares; matching on them would tie every constraint to every violation. */
+const CONSTRAINT_STOP = new Set(
+  "dont don't touch touching change changing modify modifying edit editing never leave alone keep remove removing delete deleting code module modules file files this that these those without avoid make sure must should always please anything stuff part parts".split(
+    " ",
+  ),
+);
+
 /** A constraint like "don't touch payments" matches a file flagged against-instruction by the same words. */
 function matchesConstraint(text: string, s: FileScope): boolean {
   if (!s.againstInstruction) return false;
@@ -241,7 +295,7 @@ function matchesConstraint(text: string, s: FileScope): boolean {
       t
         .toLowerCase()
         .split(/[^a-z0-9]+/)
-        .filter((w) => w.length >= 4),
+        .filter((w) => w.length >= 4 && !CONSTRAINT_STOP.has(w)),
     );
   const a = words(text);
   return [...words(s.againstInstruction.text)].some((w) => a.has(w));

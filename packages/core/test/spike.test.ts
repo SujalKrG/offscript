@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { checkTests, fileFlags, verdictForClaim } from "../src/checks.ts";
 import { extractFacts } from "../src/facts.ts";
 import { makeRelResolver, repoRoot, sessionChange, worktreeRoots } from "../src/git.ts";
-import { findSessions, parseSession, TEST_COMMAND_RE } from "../src/ingest/claude-code.ts";
+import { findSessions, parseSession, TEST_COMMAND_RE, userCommandFailed } from "../src/ingest/claude-code.ts";
 import { buildIntentLedger } from "../src/intent.ts";
 import { buildOtherSessionIndex, traceProvenance } from "../src/provenance.ts";
 import { redact } from "../src/redact.ts";
@@ -708,6 +708,170 @@ describe("verdicts (did it do what you asked?)", () => {
     );
     expect(r.verdicts[0]!.verdict).toBe("not done");
     expect(r.verdicts[0]!.why).toContain("commands seen: adb devices && ./scripts/sos-flow.sh");
+  });
+
+  describe("review round 3", () => {
+    const long = "Here is the full analysis you asked for. ".padEnd(260, "x");
+    const fileProv = (path: string, turn: number) =>
+      ({
+        files: [
+          {
+            path,
+            status: "modified",
+            addedLines: 3,
+            attributedLines: 3,
+            otherSessionLines: 0,
+            viaBackups: 0,
+            turns: [turn],
+            touchedByAgent: true,
+            shellMentioned: false,
+            inPrompts: false,
+            inAgentText: true,
+          },
+        ],
+      }) as unknown as import("../src/provenance.ts").Provenance;
+
+    test("#1 'fix X and commit' with a commit but no code in the change is partly done, not done", () => {
+      const r = judgeIntents(session([{ p: 1, cmd: "git commit -am wip" }]), [intent("I1", "Fix the receipt page and commit it", [1])], null, null);
+      expect(r.verdicts[0]!.verdict).toBe("partly done");
+      const withCode = judgeIntents(
+        session([{ p: 1, cmd: "git commit -am fix" }]),
+        [intent("I1", "Fix the receipt page and commit it", [1])],
+        fileProv("api/receipt.ts", 1),
+        null,
+      );
+      expect(withCode.verdicts[0]!.verdict).toBe("done");
+    });
+
+    test("#2 a command with no recorded result proves nothing; the last attempt decides", () => {
+      const s1 = session([{ p: 1, cmd: "git push origin fix/x" }]);
+      s1.shell[0]!.failed = null;
+      expect(judgeIntents(s1, [intent("I1", "Push the branch", [1])], null, null).verdicts[0]!.verdict).toBe("needs judgment");
+      const retried = judgeIntents(
+        session([
+          { p: 1, cmd: "git push", failed: true },
+          { p: 1, cmd: "git push" },
+        ]),
+        [intent("I1", "Push the branch", [1])],
+        null,
+        null,
+      );
+      expect(retried.verdicts[0]!.actions[0]!.command).toContain("after 1 failed attempt");
+      const lastFailed = judgeIntents(
+        session([
+          { p: 1, cmd: "git push" },
+          { p: 1, cmd: "git push", failed: true },
+        ]),
+        [intent("I1", "Push the branch", [1])],
+        null,
+        null,
+      );
+      expect(lastFailed.verdicts[0]!.verdict).toBe("failed");
+    });
+
+    test("#3 your own command's failure is read from stdout too (test runners print there)", () => {
+      expect(userCommandFailed(" FAIL  src/cart.test.ts\nTests: 1 failed, 4 passed", "")).toBe(true);
+      expect(userCommandFailed("✓ 12 passed", "")).toBe(false);
+      expect(userCommandFailed("", "")).toBeNull();
+    });
+
+    test("#4 a constraint offscript cannot check from files is 'not checked', not 'kept'", () => {
+      const r = judgeIntents(
+        session([]),
+        [intent("C1", "Always use bun, not npm", [0], { kind: "constraint" }), intent("C2", "Don't touch the payments module", [1], { kind: "constraint" })],
+        null,
+        new Map(),
+      );
+      expect(r.verdicts.map((v) => v.verdict)).toEqual(["not checked", "kept"]);
+    });
+
+    test("#5 progress narration is not an answer; the reply that closes the request is", () => {
+      const narrated = session(
+        [],
+        [
+          { p: 1, text: long },
+          { p: 1, text: "Running it now." },
+        ],
+      );
+      expect(judgeIntents(narrated, [intent("I1", "Explain why the 403 happens", [1])], null, null).verdicts[0]!.verdict).not.toBe("answered");
+      const closed = session(
+        [],
+        [
+          { p: 1, text: "Looking..." },
+          { p: 1, text: long },
+        ],
+      );
+      expect(judgeIntents(closed, [intent("I1", "Explain why the 403 happens", [1])], null, null).verdicts[0]!.verdict).toBe("answered");
+    });
+
+    test("#6 nouns are not actions: push notifications, commit message parser", () => {
+      const r = judgeIntents(
+        session([]),
+        [
+          intent("I1", "Add push notifications for new rides", [1]),
+          intent("I2", "Fix the commit message parser", [2]),
+          intent("I3", "Resolve the merge conflicts in rides.ts", [3]),
+        ],
+        null,
+        null,
+      );
+      for (const v of r.verdicts) expect(v.actions).toEqual([]);
+    });
+
+    test("#7 commands that only mention the word do not count as the action", () => {
+      const r = judgeIntents(
+        session([
+          { p: 1, cmd: "cat .github/workflows/deploy.yml" },
+          { p: 1, cmd: "git merge-base main HEAD" },
+          { p: 1, cmd: "ls tests/e2e" },
+        ]),
+        [intent("I1", "Deploy the fix, merge the PR and run the e2e tests", [1])],
+        null,
+        null,
+      );
+      expect(r.verdicts[0]!.actions.every((a) => a.status === "missing")).toBe(true);
+    });
+
+    test("#8 'before' and 'not' do not swallow the rest of the request", () => {
+      const r = judgeIntents(
+        session([
+          { p: 1, cmd: "git commit -m x" },
+          { p: 1, cmd: "git push" },
+        ]),
+        [intent("I1", "Commit and push before I leave, then open a PR", [1])],
+        null,
+        null,
+      );
+      expect(r.verdicts[0]!.actions.map((a) => a.kind).sort()).toEqual(["commit", "pr", "push"]);
+    });
+
+    test("#9 two constraints from one prompt are judged separately", () => {
+      const scope = new Map([
+        ["api/src/payments/webhook.ts", { kind: "drift", reason: "", againstInstruction: { prompt: 1, text: "Don't touch payments" } }],
+      ]) as Map<string, import("../src/scope.ts").FileScope>;
+      const r = judgeIntents(
+        session([]),
+        [intent("C1", "Don't touch payments", [1], { kind: "constraint" }), intent("C2", "Don't touch the auth module", [1], { kind: "constraint" })],
+        null,
+        scope,
+      );
+      expect(r.verdicts.map((v) => v.verdict)).toEqual(["violated", "kept"]);
+    });
+
+    test("#10 output attaches only to the '!' command right before it", () => {
+      const { appendFileSync } = require("node:fs") as typeof import("node:fs");
+      const f = buildFixture();
+      const add = (text: string) =>
+        appendFileSync(
+          f.transcript,
+          `${JSON.stringify({ type: "user", sessionId: f.sessionId, timestamp: new Date().toISOString(), origin: { kind: "human" }, message: { role: "user", content: text } })}\n`,
+        );
+      add("<bash-input>bun test</bash-input>"); // its output record is missing
+      add("now deploy");
+      add("<bash-stdout></bash-stdout><bash-stderr>fatal: not a git repository</bash-stderr>"); // stray output, not bun test's
+      const own = parseSession(f.transcript).shell.find((r) => r.byUser)!;
+      expect(own.failed).toBeNull();
+    });
   });
 
   test("the only merge attempt failed: failed", () => {

@@ -244,6 +244,8 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
     return r.text;
   };
 
+  let awaitingOutput: ShellRun | null = null; // a "!" command whose output record should come next
+
   // trackingPath -> version -> backup (from Claude Code's file-history records)
   const backups = new Map<string, Map<number, { file: string | null; time: string; parent: string | null }>>();
   function noteBackup(trackingPath: string, b: any) {
@@ -331,7 +333,7 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
     const bash = /^<bash-input>([\s\S]*?)<\/bash-input>/.exec(cleaned);
     if (bash) {
       const command = bash[1]!.trim();
-      shell.push({
+      const run: ShellRun = {
         seq: ++seq,
         afterPrompt: prompts.length,
         toolUseId: "",
@@ -340,19 +342,22 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
         failed: null,
         timestamp: rec.timestamp ?? "",
         byUser: true,
-      });
+      };
+      shell.push(run);
+      awaitingOutput = run;
       continue;
     }
     if (/^<bash-(stdout|stderr)>/.test(cleaned)) {
-      // Output of your own "!" command: mark it failed when only an error came back.
-      const last = [...shell].reverse().find((r) => r.byUser);
-      if (last && last.failed === null) {
+      // Output of your own "!" command. It belongs only to the command recorded right before it.
+      if (awaitingOutput) {
         const out = /<bash-stdout>([\s\S]*?)<\/bash-stdout>/.exec(cleaned)?.[1]?.trim() ?? "";
         const err = /<bash-stderr>([\s\S]*?)<\/bash-stderr>/.exec(cleaned)?.[1]?.trim() ?? "";
-        last.failed = !out && /error|not found|no such file|denied|failed/i.test(err);
+        awaitingOutput.failed = userCommandFailed(out, err);
+        awaitingOutput = null;
       }
       continue;
     }
+    awaitingOutput = null;
     if (NOISE_PREFIXES.some((p) => cleaned.startsWith(p))) continue;
     prompts.push({ index: prompts.length + 1, uuid: rec.uuid ?? "", timestamp: rec.timestamp ?? "", text: red(cleaned) });
   }
@@ -603,4 +608,20 @@ function backupDeltas(
   }
   deltas.sort((a, b) => (a.timestamp ?? "").localeCompare(b.timestamp ?? ""));
   return { deltas, files, baselines, unexplained };
+}
+
+/**
+ * Did one of your own "!" commands fail? Test runners report failures on stdout, so both streams are read.
+ * Returns null when the output does not say either way.
+ */
+export function userCommandFailed(stdout: string, stderr: string): boolean | null {
+  const all = `${stdout}\n${stderr}`;
+  if (
+    /\b(\d+\s+(failed|failing)|FAIL\b|Tests?:\s+\d+\s+failed|✗|✘|error TS\d+|Error:|ERR!|exit (code|status) [1-9]|command not found|No such file or directory|Permission denied|fatal:)/i.test(
+      all,
+    )
+  )
+    return true;
+  if (/\b(\d+\s+pass(ed|ing)?|✓|✔|0 fail|PASS\b|ok\b|done\b|success)/i.test(all) || (stdout && !stderr)) return false;
+  return null;
 }

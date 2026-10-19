@@ -69,7 +69,20 @@ export function renderSession(r: SessionReport): string {
   // Verdicts
   if (r.verdicts?.verdicts.length) {
     const v = r.verdicts;
-    const order = ["done", "answered", "kept", "partly done", "needs judgment", "not in change", "failed", "not done", "violated", "superseded", "cancelled"];
+    const order = [
+      "done",
+      "answered",
+      "kept",
+      "not checked",
+      "partly done",
+      "needs judgment",
+      "not in change",
+      "failed",
+      "not done",
+      "violated",
+      "superseded",
+      "cancelled",
+    ];
     const summary = order.filter((k) => v.counts[k as keyof typeof v.counts]).map((k) => `${v.counts[k as keyof typeof v.counts]} ${k}`);
     L.push(`## 1b. Did it do what you asked? (verdicts from evidence, no model)`);
     L.push("");
