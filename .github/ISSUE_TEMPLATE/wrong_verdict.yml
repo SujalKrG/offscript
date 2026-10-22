@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thank you. Real cases are the most valuable thing you can give this project.
-        **Share the report from `spike-results/`, never the raw `.jsonl` transcript.** Remove client names, paths and anything private.
+        **Share the report from `.offscript/reports/` (or `spike-results/`), never the raw `.jsonl` transcript.** Remove client names, paths and anything private.
   - type: dropdown
     id: kind
     attributes:

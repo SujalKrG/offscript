@@ -5,59 +5,67 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
-### Fixed
-- `offscript review` exits 0 by default. `--fail-on` now defaults to `never`; use `--fail-on problems` or `any` in CI to get exit code 1. A normal interactive review no longer makes `bun run` print "error: script exited with code 1".
-- False "against your instruction" and "violated" results. A file constraint must be a real "leave it alone" instruction: a touch verb (touch, change, modify, edit, rewrite, refactor, delete, remove, rename, move) after a negation, "leave X alone", or "keep X as is". "Without breaking them", "keep the apps working", "only capture screenshots" and "edited like the other apps" are goals and come out as "not checked". A file that another active request anchors is no longer flagged against an instruction.
-- The offline ledger (`--no-llm`) no longer turns harness prompts (`[Request interrupted...]`, `<command-...>`, `Caveat:`, local command output) into requests.
-- Terminal view uses the real terminal width (default 100, minimum 60): the quote gets about 40% of the line, the evidence the rest, cut on a word boundary with "...". The reason for an unexplained file no longer repeats itself.
-
 ### Added
-- Claim check (report section 2a): claims in the agent's replies (tests pass, type check clean, committed, pushed, PR opened, merged, deployed, built, fixed, "only touched X", "everything is done") are checked against evidence from before the reply: verified, contradicted, stale (tests passed, then more edits), overstated, unsupported or unverified. **Silent gaps** list requests left unfinished that the agent never mentioned. Deterministic, following OverclaimBench and Advani 2026; notes in `research/claim-checks.md`.
-- Verdict per request (report section 1b): done, partly done, failed, not done, not in change, answered, or needs judgment for tasks; kept or violated for constraints. Decided from independent evidence in that request's turns (code that landed, commit/push/PR/merge/test/type-check/build/deploy commands and whether they succeeded, substantive replies), never from the agent's own summary. Files no request explains are listed as extra work. Commands you ran yourself with Claude Code's `!` shell count as evidence (marked "you ran") and are no longer treated as prompts. When a test or deploy request shows no recognised run, the verdict lists the commands that did run.
-- Verdicts never say "done" without proof: a "fix X and commit" whose code is not in the change is "partly done"; a command with no recorded result is "needs judgment"; the last attempt decides, and earlier failures are noted. Constraints that cannot be checked from files are "not checked" instead of "kept". An answer must close the request's turns, not be progress narration. Actions are read only from clauses that start with an action verb, so "push notifications" or "commit message parser" are not git requests, and commands that merely mention a word (`cat deploy.yml`, `git merge-base`) do not count. Your own `!` command output is read from stdout and stderr and attached only to the command right before it.
-- Scope check per changed file: anchor (what you asked for), related (its test, an import either way, a sibling in a small folder, or something the agent told you about), derived (lockfiles, generated and housekeeping files) or drift. Only drift is flagged `undisclosed`, which removes the noise on test files and on files that belong to the requested feature. Words that appear in more than 5% of the repo's paths (app names like `driver`) do not anchor files on their own.
-- Sensitive files (infra, auth, payments, migrations, CI, `.env`) need direct evidence to be in scope; sitting next to an in-scope file is not enough. Files in scratch folders (`.scratch/`, `tmp/`) are grouped as `scratch-file` with one summary line instead of being flagged one by one.
-- `against-instruction` flag: the agent changed a file you explicitly told it not to touch ("don't touch auth", "leave payments alone").
-- README with logo, demo, comparison table and roadmap.
-- Contributing guide, code of conduct, security policy, issue forms, pull request template.
-- CI workflow running tests and type checks on Linux and macOS.
-- Social preview image, `.gitattributes` and `.editorconfig`.
 
-- Industry-grade CI: Biome lint and format, strict types, tests on Linux, macOS and Windows with an 85% coverage gate, dependency audit, TruffleHog secret scan, `typos`, actionlint and zizmor on workflows, CodeQL for code and workflows, dependency review, OpenSSF Scorecard, Dependabot with a 7-day cooldown, and a single required `CI OK` check. Every action is pinned to a commit hash; every job has least-privilege permissions.
-- `bun run check` runs CI's required checks locally.
-
-- `offscript` command line (`packages/cli`, run with `bun run offscript`; no new dependencies):
-  - `offscript review [session-id-prefix]` reviews the latest session in the repo (or the one named) and prints a short terminal view: three headline answers (did what you asked, only what you asked, told the truth), then at most 8 problems with one line of evidence each. `--full` prints every request, claim and flagged file. Piped output and `NO_COLOR` get plain ASCII glyphs; a UTF-8 terminal gets colour and Unicode. The markdown report is always written, by default to `.offscript/reports/<date>-<id>.md` (`--md <file>` moves it).
-  - `--json` prints a machine-readable result with `schemaVersion: 1`. `--fail-on never|problems|any` sets the exit code: 0 ok, 1 problems found, 2 usage error, 3 no session found.
-  - `--no-llm` runs fully offline: a heuristic ledger makes one request per prompt that is not a follow-up ("yes", "go ahead"), and no `claude` process is started. Without the Claude Code CLI, or when the model call fails, the review falls back to it and says so.
+#### Review CLI
+- `offscript` command line (`packages/cli`, run with `bun run offscript`; no new dependencies).
+  - `offscript review [session-id-prefix]` reviews the latest session in the repo (or the one named) and prints a short terminal view: three headline answers (did what you asked, only what you asked, told the truth), then at most 8 problems with one line of evidence each. `--full` prints every request, claim and flagged file. Piped output and `NO_COLOR` get plain ASCII glyphs; a UTF-8 terminal gets colour and Unicode. The view uses the real terminal width (default 100, minimum 60), and long quotes and evidence are cut on a word boundary with "...". Terminal escape codes in transcript text are stripped before printing.
+  - The Markdown report is always written, by default to `.offscript/reports/<date>-<id>.md` (`--md <file>` moves it).
+  - `--json` prints a machine-readable result with `schemaVersion: 1`.
+  - `--fail-on never|problems|any` sets when the exit code is 1. The default is `never`, so a normal interactive review exits 0.
+  - Exit codes: 0 reviewed, 1 problems found (only with `--fail-on`), 2 usage error, 3 no session found, 4 unexpected failure.
+  - `--no-llm` runs fully offline. A heuristic ledger makes one request per prompt that is not a follow-up ("yes", "go ahead") and skips harness prompts (`[Request interrupted...]`, `<command-...>`, `Caveat:`, local command output). No `claude` process is started. Without the Claude Code CLI, or when the model call fails, the review falls back to the heuristic ledger and says so.
   - `offscript list` shows the repo's sessions (id, date, prompts, edits).
-  - `offscript hook install [--project|--user]` merges a SessionEnd hook (`"timeout": 60`) into Claude Code settings without touching other keys; running it again changes nothing. `offscript review --hook` reads the hook's JSON from stdin, reviews exactly that session, writes the report and prints one line (a `systemMessage`). A hook never fails a session end: every error becomes that one line and exit code 0.
-- Intent ledger cache: the model result is stored by content (model, prompt version, your prompts, rules file, the agent's last message), so reviewing the same session again is instant and free. Entries are written atomically (tmp file, then rename) under `$XDG_CACHE_HOME/offscript`, `~/.cache/offscript` or `%LOCALAPPDATA%\offscript` (`OFFSCRIPT_CACHE_DIR` overrides). Failed model calls are never cached.
-- `reviewSession()` in `packages/core/src/review.ts` holds the review pipeline that used to live in the spike script; the spike and the CLI share it.
+- Intent ledger cache. The only model use is splitting your prompts into requests, through your own Claude Code CLI (`haiku` by default, `OFFSCRIPT_MODEL` changes it). The result is stored by content (model, prompt version, your prompts, rules file, the agent's last message), so reviewing the same session again is instant and free. Entries are written atomically under `$XDG_CACHE_HOME/offscript`, `~/.cache/offscript` or `%LOCALAPPDATA%\offscript` (`OFFSCRIPT_CACHE_DIR` overrides). Failed model calls are never cached.
+- Claude Code hook. `offscript hook install [--project|--user]` merges a `SessionEnd` hook (`"timeout": 60`) into Claude Code settings without touching other keys; running it again changes nothing. `offscript review --hook` reads the hook's JSON from stdin, reviews exactly that session, writes the report and prints one `systemMessage` line.
+  - A hook never blocks the end of a session: it waits at most 5 s for stdin, caps the model call at 30 s, and turns every error into that one line with exit code 0.
+- Windows hardening: settings files with a byte order mark are read, the hook command uses forward slashes, a timed-out model call has its whole process tree killed with `taskkill`, temp folder cleanup is best effort and cannot fail a review, `.cmd` paths with spaces are quoted, and native Windows root paths are handled.
+- Secret redaction also covers errors from the model call, so a CLI error that echoes a prompt cannot leak a key to the terminal, JSON or report.
+- `reviewSession()` in `packages/core/src/review.ts` holds the review pipeline that used to live in the spike script; the spike and the CLI share it, and the spike's output is unchanged.
+
+#### Verdicts
+- Verdict per request (report section 1b): done, partly done, failed, not done, not in change, answered, or needs judgment for tasks; kept, violated or not checked for constraints. Decided from independent evidence in that request's turns (code that landed, commit/push/PR/merge/test/type-check/build/deploy commands and whether they succeeded, substantive replies), never from the agent's own summary.
+- Verdicts never say "done" without proof. A "fix X and commit" whose code is not in the change is "partly done"; a command with no recorded result is "needs judgment"; the last attempt decides, and earlier failures are noted. Constraints that cannot be checked from files are "not checked" instead of "kept". An answer must close the request's turns, not be progress narration.
+- Actions are read only from clauses that start with an action verb, so "push notifications" or "commit message parser" are not git requests, and commands that merely mention a word (`cat deploy.yml`, `git merge-base`) do not count.
+- Commands you ran yourself with Claude Code's `!` shell count as evidence (marked "you ran") and are not treated as prompts. Their output is read from stdout and stderr and attached only to the command right before it. When a test or deploy request shows no recognised run, the verdict lists the commands that did run.
+- A file constraint must be a real "leave it alone" instruction: a touch verb (touch, change, modify, edit, rewrite, refactor, delete, remove, rename, move) after a negation, "leave X alone", or "keep X as is". "Without breaking them", "keep the apps working", "only capture screenshots" and "edited like the other apps" are goals and come out as "not checked". A file that another active request anchors is not flagged against an instruction.
+
+#### Claims
+- Claim check (report section 2a): claims in the agent's replies (tests pass, type check clean, committed, pushed, PR opened, merged, deployed, built, fixed, "only touched X", "everything is done") are checked against evidence from before the reply: verified, contradicted, stale (tests passed, then more edits), overstated, unsupported or unverified. Deterministic, following OverclaimBench and Advani 2026; notes in `research/claim-checks.md`.
+- Silent gaps list requests left unfinished that the agent never mentioned.
+- Claim tuning: CI results you read count as evidence (`gh pr checks`, `gh run list|watch|view`). Watching a deploy or fetching a live URL counts as evidence for a deploy claim. Sentences about history or descriptions (a past commit hash, a PR number, a date, a table row) are skipped, as are plans, conditions, questions and negations.
+
+#### Scope
+- Scope check per changed file: anchor (what you asked for), related (its test, an import either way, a sibling in a small folder, or something the agent told you about), derived (lockfiles, generated and housekeeping files), scratch or drift. Only drift is flagged `undisclosed`, which removes the noise on test files and on files that belong to the requested feature. Words that appear in more than 5% of the repo's paths (app names like `driver`) do not anchor files on their own.
+- Sensitive files (infra, auth, payments, migrations, CI, `.env`) need direct evidence to be in scope; sitting next to an in-scope file is not enough.
+- Files in scratch folders (`.scratch/`, `tmp/`) are grouped as `scratch-file` with one summary line instead of being flagged one by one.
+- `against-instruction` flag: the agent changed a file you explicitly told it not to touch ("don't touch auth", "leave payments alone").
+- Files no request explains are listed as extra work. The reason for an unexplained file is stated once.
+
+#### Provenance and session change
+- Session change selection: commits on any branch that touch the session's files during the session, plus uncommitted edits to those files in any worktree. Files in those commits that the session never edited are left out, counted and named in the report.
+- Uncommitted files are compared with Claude Code's backup from before the session touched them when one exists, not with `HEAD`, so changes that were already there are not counted. A file back to its pre-session state is not an uncommitted edit.
+- Duplicate commits (rebase, cherry-pick, squash-merge copies) are detected with `git patch-id` and counted once. Lines added and then rewritten across commits net out. Repeated lines (`}`, `return null;`) are not collapsed when uncommitted edits overlap a commit.
+- Changes made outside edit tools (scripts run through Bash, `sed`, `cp`) are traced through Claude Code's own file backups (`~/.claude/file-history`) and credited to the turn in between, only when the agent could have made them. A backup-only line another session wrote with an edit tool goes to that session.
+- Lines a parallel agent session wrote into the same file are credited to that session (named in the report) instead of being counted as untraced.
+- Edits and test runs by subagents (Task tool), stored in `<session>/subagents/`, are part of the session.
+- Edits made in sibling git worktrees are mapped back to the repo, and sessions started in a worktree are found too.
+- All of a session's commits are read in one `git show`. Commits beyond the 200 limit are named in the report instead of dropped silently. Transcripts that ended before a session's window are skipped without parsing.
+- Claude Code record types `file-history-delta` and `pr-link` are recognised.
+
+#### CI and repo
+- README with logo, demo, comparison table and roadmap. Contributing guide, code of conduct, security policy, issue forms, pull request template. Social preview image, `.gitattributes` and `.editorconfig`.
+- CI: Biome lint and format, strict types, tests on Linux, macOS and Windows with an 85% coverage gate, dependency audit, TruffleHog secret scan, `typos`, actionlint and zizmor on workflows, CodeQL for code and workflows, dependency review, OpenSSF Scorecard, Dependabot with a 7-day cooldown, and a single required `CI OK` check. Every action is pinned to a commit hash; every job has least-privilege permissions.
+- `bun run check` runs CI's required checks locally.
+- Codebase formatted with Biome, with a few lint findings fixed.
 
 ### Changed
-- `spike.ts` now calls `reviewSession()`; its output is unchanged.
-- Removed the `unrequested?` flag, which fired on almost every file; the report's scope column says why each file is in scope instead.
-- Codebase formatted with Biome; a few lint findings fixed (assignments inside expressions, a comma operator, unneeded regex escapes).
-- Test fixture builds its fake API key at runtime, so no key-shaped text appears in the source.
+- The spike (`bun run spike`) now calls `reviewSession()`; its output is unchanged.
+- Removed the spike's `unrequested?` flag, which fired on almost every file. The report's scope column says why each file is in scope instead.
 
 ### Fixed
-- A session's change is now found the way people actually work: commits on any branch (not just the one checked out) that touch the session's files during the session, plus uncommitted edits to those files in any worktree. Previously the spike fell back to the whole dirty working tree, which mixed in other sessions' work and made line tracing look near 0%.
-- When a commit also carries files the session never edited (another session's or a person's work), only the session's own files are reviewed; the rest are counted and named as left out.
-- Lines that a parallel agent session wrote into the same file are credited to that session (named in the report) instead of being counted as untraced.
-- Edits and test runs made by subagents (Task tool), stored in `<session>/subagents/`, are now part of the session.
-- Uncommitted content identical to a commit already reviewed is no longer counted twice.
-- Changes the agent made outside edit tools (scripts run through Bash, `sed`, `cp`) are traced through Claude Code's own file backups (`~/.claude/file-history`): what changed between two backups is credited to the turn in between.
-- Uncommitted files are compared with Claude Code's backup from before the session touched them, not with HEAD, so local changes that were already there are not counted as the session's.
-- Backup changes are credited to the agent only when it could have made them: an edit to that file or a file-writing shell command in that window. A backup-only line another session wrote with an edit tool goes to that session.
-- Duplicate commits (rebase, cherry-pick, squash-merge copies) are detected with `git patch-id` and counted once; lines added and then rewritten across commits net out.
-- Repeated lines (`}`, `return null;`) are no longer collapsed when uncommitted edits overlap a commit.
-- A file back to its pre-session state no longer counts as an uncommitted edit.
+- The spike fell back to the whole dirty working tree when a session's change was not found, which mixed in other sessions' work and made line tracing look near 0%. It now reviews only the session's own commits and files.
 - `--base` without `--head` includes untracked files again.
-- All of a session's commits are read in one `git show` instead of two git calls per commit; commits beyond the 200 limit are named in the report instead of dropped silently.
-- Transcripts that ended before a session's window are skipped without parsing.
-- Edits made in sibling git worktrees are mapped back to the repo instead of being counted as outside it, and sessions started in a worktree are found too.
-- Claude Code record types `file-history-delta` and `pr-link` are recognised.
 - Git is always run with `--no-optional-locks`, so offscript never leaves lock files in your repo.
 - Paths are compared after resolving symlinks and short names, so sessions are found when the repo is reached through a symlink (macOS `/var` vs `/private/var`) or a different spelling of the same folder.
 

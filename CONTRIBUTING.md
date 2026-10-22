@@ -1,6 +1,6 @@
 # Contributing to offscript
 
-Thanks for helping. offscript is early (v0.0 spike), so the most valuable contributions right now are **evidence**: real sessions where an agent went off-script, and verdicts offscript got wrong.
+Thanks for helping. offscript is early (v0.1 in progress), so the most valuable contributions right now are **evidence**: real sessions where an agent went off-script, and verdicts offscript got wrong.
 
 ## Ways to help
 
@@ -8,25 +8,25 @@ Thanks for helping. offscript is early (v0.0 spike), so the most valuable contri
 |---|---|
 | A case where your agent went off-script (redacted) | [Open an "Off-script case" issue](../../issues/new?template=wrong_verdict.yml) |
 | offscript flagged something wrongly, or missed something | Same form, choose "false positive" or "missed" |
-| A bug in the spike or parser | [Bug report](../../issues/new?template=bug_report.yml) |
+| A bug in the CLI, the spike or the parser | [Bug report](../../issues/new?template=bug_report.yml) |
 | An idea | [Feature request](../../issues/new?template=feature_request.yml) |
 | Code | Pull request (read below first) |
 
 ## Development setup
 
-Requirements: [Bun](https://bun.sh) 1.4+, git. Claude Code is optional (only the intent step uses it).
+Requirements: [Bun](https://bun.sh) 1.4+, git. Claude Code is optional. Only the step that splits your prompts into requests uses it; `--no-llm` skips it.
 
 ```bash
 git clone https://github.com/SujalKrG/offscript.git
 cd offscript
 bun install
-bun run check      # everything CI's required checks run locally: lint + format, strict types, tests with coverage
+bun run check      # CI's required checks locally: lint + format, strict types, tests with the 85% coverage gate
 ```
 
 Individually:
 
 ```bash
-bun test           # unit + end-to-end tests on a throwaway repo and transcript
+bun test           # unit and end-to-end tests on a throwaway repo and transcript
 bun run typecheck  # strict TypeScript
 bun run lint       # Biome: lint, formatting, import order (fails on any difference)
 bun run format     # fix formatting and safe lint issues in place
@@ -49,22 +49,34 @@ Every pull request runs these. **CI OK** is the single required check; it passes
 
 A non-blocking job also runs the tests on the latest Bun release, to catch breakage early. OpenSSF Scorecard runs weekly.
 
-Run the spike against a repo of yours:
+Run offscript against a repo of yours:
+
+```bash
+bun run offscript review --repo /path/to/repo            # latest session with edits
+bun run offscript review --repo /path/to/repo --no-llm   # no model at all
+bun run offscript list --repo /path/to/repo              # sessions, to pick one by id prefix
+```
+
+The spike is kept for collecting labelled cases. It writes a Markdown report per session with a labelling block, always asks the model fresh, and scores your labels:
 
 ```bash
 bun run spike --repo /path/to/repo --limit 3
-bun run spike --repo /path/to/repo --no-llm   # no model at all
+bun run spike:score
 ```
+
+Reports go to `.offscript/reports/` (CLI) or `spike-results/` (spike). Both are gitignored here; in your own repo, add `.offscript/` to `.gitignore`.
 
 ## The five rules
 
 Every change must keep these true. PRs that break one will be asked to change, however useful they are otherwise.
 
-1. **Facts before opinions.** If something can be computed from git or the transcript, compute it. Never let a model overrule a computed fact.
-2. **Leakage rule.** Intent extraction never sees code. Code description never sees intents.
-3. **Evidence or silence.** Every finding cites a prompt quote or a diff hunk. No style, naming or "best practice" comments.
-4. **Abstain instead of guess.** If you can't be sure, the output is *uncertain*, not a guess.
+1. **Deterministic evidence first.** If something can be computed from git or the transcript, compute it. Never let a model overrule a computed fact.
+2. **The model only splits prompts into requests, and never sees code.** Do not send the diff or file contents to a model. Do not add a model step without discussing it first.
+3. **Evidence or silence.** Every finding cites a prompt quote, a command or a changed file. No style, naming or "best practice" comments.
+4. **"Needs judgment" and "not checked" instead of guessing.** If the evidence does not settle it, say so. Do not return "done" or "kept" without proof.
 5. **Privacy by default.** Redact before storing, printing or sending anything. Raw transcripts never leave the user's machine. Never log prompt text in errors.
+
+Docs follow the same standard. offscript exists to catch agents overclaiming, so a README or changelog line must match what the code does today. Mark anything not built as planned.
 
 ## Code layout
 
@@ -72,14 +84,23 @@ Every change must keep these true. PRs that break one will be asked to change, h
 packages/core/src/
   ingest/claude-code.ts   transcript reader
   redact.ts               secret redaction
-  git.ts                  diff range per session, diff parser
+  git.ts                  session change: commits, uncommitted edits, diff parser
   facts.ts                deterministic facts
   provenance.ts           added line -> agent edit -> turn -> prompt
-  checks.ts               test evidence, claim verdicts, file flags
-  intent.ts               intent ledger (conversation only)
+  scope.ts                anchor, related, derived, scratch, drift; against-instruction
+  verdicts.ts             verdict per request, from evidence
+  claims.ts               claim check and silent gaps
+  checks.ts               test evidence, file flags
+  intent.ts               request list: model (prompts only) or heuristic
+  cache.ts                content-addressed cache for the request list
   judge/claude-cli.ts     headless Claude Code backend
+  review.ts               the review pipeline shared by the CLI and the spike
   report.ts               Markdown report
-  spike.ts                spike entry point
+  spike.ts, score-labels.ts   labelling spike and its scorer
+packages/cli/src/
+  main.ts                 commands, flags, exit codes
+  hook.ts                 SessionEnd hook input, output and install
+  render.ts, summary.ts, json.ts   terminal view, shared numbers, JSON
 packages/core/test/       fixtures and tests
 research/                 design and research notes
 ```
@@ -88,7 +109,7 @@ research/                 design and research notes
 
 Claude Code and Codex change their session formats without notice. If you hit a parse problem:
 
-1. Run the spike; unknown record types are listed at the top of each report.
+1. Run `offscript review`; unknown record types are listed at the top of the Markdown report.
 2. Add a **minimal, synthetic** fixture to `packages/core/test/fixture.ts` that reproduces it. Never commit a real transcript.
 3. Note the CLI version in the test name.
 
@@ -96,7 +117,7 @@ Claude Code and Codex change their session formats without notice. If you hit a 
 
 Real cases are gold, but they contain your code and prompts. Before sharing:
 
-- Share the **report** from `spike-results/`, not the raw `.jsonl`.
+- Share the **report** from `.offscript/reports/` (or `spike-results/`), not the raw `.jsonl`.
 - Remove client names, file paths and anything you would not post publicly.
 - Never paste keys, even revoked ones. offscript redacts common formats, but check anyway.
 
