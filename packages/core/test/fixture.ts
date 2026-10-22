@@ -1,6 +1,6 @@
 // Builds a throwaway git repo plus a Claude Code style transcript that edits it.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,7 @@ let uuidN = 0;
 const uuid = () => `00000000-0000-4000-8000-${String(++uuidN).padStart(12, "0")}`;
 
 export function buildFixture(opts: { subagent?: boolean; backups?: boolean } = {}): Fixture {
-  const base = mkdtempSync(join(tmpdir(), "offscript-fixture-"));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), "offscript-fixture-")));
   const repo = join(base, "shop");
   const projects = join(base, "claude", "projects");
   mkdirSync(join(repo, "src"), { recursive: true });

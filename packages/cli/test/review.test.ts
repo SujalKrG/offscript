@@ -53,7 +53,7 @@ describe("review --no-llm", () => {
     expect(plain.out).not.toContain("✔");
     expect(plain.out).not.toContain("\x1b[");
     expect(plain.out).toContain("[ok]");
-    const latin = await cli(["review", "--no-llm"], { tty: true, env: { ...legacyTerm, LANG: "C", LC_ALL: "", NO_COLOR: "" } });
+    const latin = await cli(["review", "--no-llm"], { tty: true, env: { ...legacyTerm, LANG: "C", LC_ALL: "", LC_CTYPE: "", NO_COLOR: "" } });
     expect(latin.out).toContain("[ok]");
   });
 

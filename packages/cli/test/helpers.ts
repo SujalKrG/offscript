@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { buildFixture, claudeCalls, fakeClaude } from "../../core/test/fixture.ts";
@@ -9,7 +9,7 @@ const KEYS = ["CLAUDE_CONFIG_DIR", "OFFSCRIPT_CLAUDE_BIN", "OFFSCRIPT_CACHE_DIR"
 /** A throwaway repo with one Claude Code session, a fake `claude`, and an isolated cache. Sets process.env until restore(). */
 export function setup(opts: { fail?: boolean; claude?: boolean } = {}) {
   const fx = buildFixture();
-  const dir = mkdtempSync(join(tmpdir(), "offscript-cli-"));
+  const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "offscript-cli-")));
   const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
   process.env.CLAUDE_CONFIG_DIR = dirname(fx.projects);
   process.env.OFFSCRIPT_CACHE_DIR = join(dir, "cache");
