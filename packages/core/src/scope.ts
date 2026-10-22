@@ -63,7 +63,7 @@ const GENERIC = new Set(
 
 /** Verbs that change a file. "Break" and "work" are not here: "without breaking them" and "keep X working" are goals, not "leave it alone". */
 const TOUCH_VERB =
-  "touch(?:ing)?|chang(?:e|ing)|modif(?:y|ying)|edit(?:ing)?|rewrit(?:e|ing)|refactor(?:ing)?|delet(?:e|ing)|remov(?:e|ing)|renam(?:e|ing)|mov(?:e|ing)|alter(?:ing)?|overwrit(?:e|ing)|replac(?:e|ing)";
+  "touch(?:ing)?|chang(?:e|ing)|modif(?:y|ying)|edit(?:ing)?|rewrit(?:e|ing)|refactor(?:ing)?|delete|deleting|remov(?:e|ing)|renam(?:e|ing)|mov(?:e|ing)|alter(?:ing)?|overwrit(?:e|ing)|replac(?:e|ing)";
 
 /** A real prohibition ("don't touch auth", "leave payments alone", "keep the schema as is"), not any sentence with "not" in it. */
 const NEGATION_RE = new RegExp(
