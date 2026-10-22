@@ -1,6 +1,6 @@
 // Builds a throwaway git repo plus a Claude Code style transcript that edits it.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -241,41 +241,46 @@ export function buildFixture(opts: { subagent?: boolean; backups?: boolean } = {
  * The logic is a Bun script; the launcher is a .cmd on Windows (run through cmd.exe, like the real
  * npm-installed `claude.cmd`) and a shell script elsewhere, so the test runs on every OS.
  */
-export function fakeClaude(dir: string): string {
+export function fakeClaude(dir: string, opts: { fail?: boolean; hangMs?: number; errorText?: string } = {}): string {
   const envelope = {
     type: "result",
     subtype: "success",
-    is_error: false,
+    is_error: opts.fail === true,
     total_cost_usd: 0.0012,
-    result: `\`\`\`json\n${JSON.stringify({
-      intents: [
-        {
-          id: "I1",
-          text: "Add a discount parameter to total()",
-          kind: "task",
-          sourcePrompts: [1],
-          quote: "Add a discount parameter",
-          status: "active",
-          supersededBy: null,
-        },
-        { id: "I2", text: "Do not touch auth", kind: "constraint", sourcePrompts: [1], quote: "Don't touch auth", status: "active", supersededBy: null },
-      ],
-      claims: [{ text: "All tests pass", type: "tests_pass" }],
-      confidence: "high",
-      notes: "",
-    })}\n\`\`\``,
+    result:
+      opts.fail && opts.errorText
+        ? opts.errorText
+        : `\`\`\`json\n${JSON.stringify({
+            intents: [
+              {
+                id: "I1",
+                text: "Add a discount parameter to total()",
+                kind: "task",
+                sourcePrompts: [1],
+                quote: "Add a discount parameter",
+                status: "active",
+                supersededBy: null,
+              },
+              { id: "I2", text: "Do not touch auth", kind: "constraint", sourcePrompts: [1], quote: "Don't touch auth", status: "active", supersededBy: null },
+            ],
+            claims: [{ text: "All tests pass", type: "tests_pass" }],
+            confidence: "high",
+            notes: "",
+          })}\n\`\`\``,
   };
   const script = join(dir, "fake-claude.ts");
   writeFileSync(
     script,
-    `import { writeFileSync } from "node:fs";
+    `import { appendFileSync, writeFileSync } from "node:fs";
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
   console.log("2.1.300 (Claude Code)");
   process.exit(0);
 }
 writeFileSync(${JSON.stringify(join(dir, "args.txt"))}, args.join(" "));
+appendFileSync(${JSON.stringify(join(dir, "calls.txt"))}, "call\\n");
 writeFileSync(${JSON.stringify(join(dir, "stdin.txt"))}, await Bun.stdin.text());
+await Bun.sleep(${opts.hangMs ?? 0});
 console.log(${JSON.stringify(JSON.stringify(envelope))});
 `,
   );
@@ -288,4 +293,13 @@ console.log(${JSON.stringify(JSON.stringify(envelope))});
   writeFileSync(sh, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
   chmodSync(sh, 0o755);
   return sh;
+}
+
+/** How many times the fake `claude` was asked for a ledger (`--version` probes are not counted). */
+export function claudeCalls(dir: string): number {
+  try {
+    return readFileSync(join(dir, "calls.txt"), "utf8").split("\n").filter(Boolean).length;
+  } catch {
+    return 0;
+  }
 }

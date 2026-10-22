@@ -61,9 +61,20 @@ const GENERIC = new Set(
   ).split(" "),
 );
 
+/** Verbs that change a file. "Break" and "work" are not here: "without breaking them" and "keep X working" are goals, not "leave it alone". */
+const TOUCH_VERB =
+  "touch(?:ing)?|chang(?:e|ing)|modif(?:y|ying)|edit(?:ing)?|rewrit(?:e|ing)|refactor(?:ing)?|delet(?:e|ing)|remov(?:e|ing)|renam(?:e|ing)|mov(?:e|ing)|alter(?:ing)?|overwrit(?:e|ing)|replac(?:e|ing)";
+
 /** A real prohibition ("don't touch auth", "leave payments alone", "keep the schema as is"), not any sentence with "not" in it. */
-const NEGATION_RE =
-  /\b(?:(?:don'?t|dont|do not|never|shouldn'?t|should not|must not|mustn'?t|avoid|without)\b[^.!?\n]{0,40}?\b(?:touch|touching|chang(?:e|ing)|modif(?:y|ying)|edit(?:ing)?|remov(?:e|ing)|delet(?:e|ing)|break(?:ing)?|refactor(?:ing)?)|leave\b[^.!?\n]{0,40}?\balone|keep\b[^.!?\n]{0,40}?\b(?:as is|untouched|intact|unchanged))\b/i;
+const NEGATION_RE = new RegExp(
+  `\\b(?:(?:don'?t|dont|do not|never|shouldn'?t|should not|must not|mustn'?t|avoid|without)\\b[^.!?\\n]{0,40}?\\b(?:${TOUCH_VERB})|leave\\b[^.!?\\n]{0,40}?\\balone|keep\\b[^.!?\\n]{0,40}?\\b(?:as is|untouched|intact|unchanged))\\b`,
+  "i",
+);
+
+/** True when the text tells the agent to leave something alone, so a changed file can break it. */
+export function isFileConstraint(text: string): boolean {
+  return NEGATION_RE.test(text) || /\b(?:do not|don'?t) (?:add|create)\b/i.test(text);
+}
 
 /** Agent scratch space: throwaway helper scripts and notes, reported once as a group, not as drift per file. */
 export const SCRATCH_RE = /(^|\/)(\.scratch|scratch|scratchpad|\.tmp|tmp|\.claude-tmp)\//i;
@@ -241,7 +252,9 @@ export function classifyScope(input: ScopeInput): Map<string, FileScope> {
   for (const f of files) {
     const words = pathWords(f.path);
     const neg = negative.find((n) => words.some((w) => n.words.has(w)));
-    const againstInstruction = neg && f.touchedByAgent ? { prompt: neg.prompt, text: neg.text } : null;
+    // Another request that anchors this file (a task in the ledger, a positive sentence) means the edit was asked for.
+    const askedElsewhere = anchorReason.has(f.path) && !f.inPrompts;
+    const againstInstruction = neg && f.touchedByAgent && !askedElsewhere ? { prompt: neg.prompt, text: neg.text } : null;
     let kind: ScopeKind;
     let reason: string;
     if (SCRATCH_RE.test(f.path) && !f.inPrompts) {

@@ -11,7 +11,7 @@ import { buildIntentLedger } from "../src/intent.ts";
 import { buildOtherSessionIndex, traceProvenance } from "../src/provenance.ts";
 import { redact } from "../src/redact.ts";
 import { renderSession } from "../src/report.ts";
-import { classifyScope, pathWords } from "../src/scope.ts";
+import { classifyScope, isFileConstraint, pathWords } from "../src/scope.ts";
 import { intentWindows, judgeIntents } from "../src/verdicts.ts";
 import { buildFixture, fakeClaude } from "./fixture.ts";
 
@@ -541,6 +541,42 @@ describe("scope (what was asked for vs drift)", () => {
     }
   });
 
+  test("goals that are not 'leave it alone' are not file constraints", () => {
+    const p = prov([fp("apps/admin/app/(dashboard)/overview/page.tsx")]);
+    for (const text of [
+      "Move the driver, admin and backend apps from the clienttesting domain to ocarindia.com without breaking them",
+      "Keep the running apps working during the domain switch",
+      "Produce only the screenshots that will be used, edited like the other apps",
+      "only capture screenshots",
+    ]) {
+      expect(isFileConstraint(text)).toBe(false);
+      expect(
+        classifyScope({ provenance: p, prompts: [{ index: 1, text }] }).get("apps/admin/app/(dashboard)/overview/page.tsx")!.againstInstruction,
+      ).toBeNull();
+    }
+    for (const text of [
+      "don't touch auth",
+      "Do not rewrite the dashboard",
+      "never rename or move files",
+      "without touching the schema",
+      "leave payments alone",
+      "keep the schema as is",
+      "avoid editing the admin app",
+    ])
+      expect(isFileConstraint(text)).toBe(true);
+  });
+
+  test("a file another active task anchors is not against-instruction", () => {
+    const p = prov([fp("apps/admin/app/(dashboard)/overview/page.tsx"), fp("apps/driver/app/(dashboard)/home/page.tsx")]);
+    const scope = classifyScope({
+      provenance: p,
+      prompts: [{ index: 53, text: "Don't change the dashboard layout, it is frozen." }],
+      extraText: ["Add an overview chart to the admin app"],
+    });
+    expect(scope.get("apps/admin/app/(dashboard)/overview/page.tsx")!.againstInstruction).toBeNull();
+    expect(scope.get("apps/driver/app/(dashboard)/home/page.tsx")!.againstInstruction).not.toBeNull();
+  });
+
   test("words from a positive request win over the same word in a 'don't' sentence elsewhere", () => {
     const p = prov([fp("api/src/payments/refund.ts")]);
     const scope = classifyScope({
@@ -859,6 +895,25 @@ describe("verdicts (did it do what you asked?)", () => {
       expect(r.verdicts.map((v) => v.verdict)).toEqual(["violated", "kept"]);
     });
 
+    test("#9b goals and non-file constraints are 'not checked', never kept or violated", () => {
+      const scope = new Map([
+        [
+          "apps/admin/app/(dashboard)/overview/page.tsx",
+          { kind: "drift", reason: "", againstInstruction: { prompt: 0, text: "Move the driver, admin ... without breaking them" } },
+        ],
+      ]) as Map<string, import("../src/scope.ts").FileScope>;
+      const r = judgeIntents(
+        session([]),
+        [
+          intent("I3", "Keep the running apps working during the domain switch", [1], { kind: "constraint" }),
+          intent("I27", "Produce only the screenshots that will be used, edited like the other apps", [1], { kind: "preference" }),
+        ],
+        null,
+        scope,
+      );
+      expect(r.verdicts.map((v) => v.verdict)).toEqual(["not checked", "not checked"]);
+    });
+
     test("#10 output attaches only to the '!' command right before it", () => {
       const { appendFileSync } = require("node:fs") as typeof import("node:fs");
       const f = buildFixture();
@@ -941,6 +996,8 @@ describe("verdicts (did it do what you asked?)", () => {
         "They were committed in `92f1912d`. On Oct 3, PR #134 replaced the shipped icons.",
         "Also deploy the user web app so the page is live. Restore the files from the shipped set.",
         "| **API tests** | 920 of 930 pass, 3 fail. ACM usually validates once the record is live.",
+        "An alternate to the committed SUV. Waiting on the deployed fixes. When the boundaries were merged, trips changed.",
+        "These are the exact files that shipped before #134.",
       ].join("\n");
       expect(checkClaims(timed([], [{ p: 1, m: 2, text }]), [], null).claims).toEqual([]);
     });
@@ -954,6 +1011,11 @@ describe("verdicts (did it do what you asked?)", () => {
       expect(kinds(r)).toEqual(["deploy:verified"]);
       const none = checkClaims(timed([], [{ p: 1, m: 2, text: "The deletion page is live." }]), [], null);
       expect(kinds(none)).toEqual(["deploy:unsupported"]);
+    });
+
+    test("'checks are green' is verified when CI results were read", () => {
+      const r = checkClaims(timed([{ p: 1, m: 1, cmd: "gh pr checks 170" }], [{ p: 1, m: 2, text: "The PR checks are all green." }]), [], null);
+      expect(kinds(r)).toEqual(["tests:verified"]);
     });
 
     test("'fixed' is not contradicted by a missing build in the same turn, or by code that landed elsewhere", () => {

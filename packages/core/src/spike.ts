@@ -8,18 +8,8 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { checkTests, fileFlags } from "./checks.ts";
-import { checkClaims } from "./claims.ts";
-import { extractFacts } from "./facts.ts";
-import { git, repoRoot, sessionChange, worktreeRoots } from "./git.ts";
-import { findSessions, parseSession } from "./ingest/claude-code.ts";
-import { buildIntentLedger } from "./intent.ts";
 import { claudeAvailable } from "./judge/claude-cli.ts";
-import { buildOtherSessionIndex, traceProvenance } from "./provenance.ts";
-import { renderSession, type SessionReport } from "./report.ts";
-import { classifyScope } from "./scope.ts";
-import type { Session } from "./types.ts";
-import { judgeIntents } from "./verdicts.ts";
+import { openRepo, reviewSession } from "./review.ts";
 
 interface Args {
   repo: string;
@@ -59,26 +49,15 @@ function parseArgs(argv: string[]): Args {
   return a;
 }
 
-function main() {
+async function main() {
   if (process.env.OFFSCRIPT_INNER === "1") return; // never run inside our own judge call
   const args = parseArgs(process.argv.slice(2));
-  const root = repoRoot(resolve(args.repo));
-  if (!root) {
+  const ctx = openRepo(args.repo);
+  if (!ctx) {
     console.error(`Not a git repository: ${args.repo}`);
     process.exit(1);
   }
-  const roots = worktreeRoots(root);
-  const repoPaths = git(root, ["ls-files"]).out.split("\n").filter(Boolean);
-  // Sessions started in the main checkout or in any of its worktrees.
-  const seen = new Set<string>();
-  const refs = roots
-    .flatMap((r) => findSessions(r))
-    .filter((r) => {
-      if (seen.has(r.id)) return false;
-      seen.add(r.id);
-      return true;
-    })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const { root, refs } = ctx;
   if (refs.length === 0) {
     console.error(`No Claude Code sessions found for ${root}. Looked in ~/.claude/projects (set CLAUDE_CONFIG_DIR if yours is elsewhere).`);
     process.exit(1);
@@ -97,37 +76,6 @@ function main() {
   const outDir = join(resolve(args.out), basename(root));
   mkdirSync(outDir, { recursive: true });
 
-  // Every session in the repo, parsed once, so lines a parallel session wrote are credited to it.
-  const parsed = new Map<string, Session | null>();
-  const getSession = (path: string) => {
-    if (!parsed.has(path)) {
-      try {
-        parsed.set(path, parseSession(path));
-      } catch {
-        parsed.set(path, null);
-      }
-    }
-    return parsed.get(path)!;
-  };
-  const OVERLAP_BEFORE_MS = 3 * 24 * 3600 * 1000;
-  const OVERLAP_AFTER_MS = 2 * 3600 * 1000;
-  const othersFor = (s: Session) => {
-    const lo = new Date(s.startedAt).getTime() - OVERLAP_BEFORE_MS;
-    const hi = new Date(s.endedAt).getTime() + OVERLAP_AFTER_MS;
-    const list: Session[] = [];
-    for (const r of refs) {
-      if (r.id === s.id) continue;
-      // A transcript last written before the window opened cannot overlap it: skip without parsing.
-      if (r.mtimeMs < lo) continue;
-      const o = getSession(r.path);
-      if (!o || o.edits.length === 0) continue;
-      const a = new Date(o.startedAt).getTime();
-      const b = new Date(o.endedAt).getTime();
-      if (b >= lo && a <= hi) list.push(o);
-    }
-    return buildOtherSessionIndex(root, list, roots);
-  };
-
   const selected = args.session ? refs.filter((r) => r.id.startsWith(args.session!)) : refs;
   const summary: string[] = [];
   let done = 0;
@@ -135,55 +83,27 @@ function main() {
 
   for (const ref of selected) {
     if (done >= args.limit) break;
-    const session = getSession(ref.path);
+    const session = ctx.getSession(ref.path);
     if (!session) continue;
     if (!args.includeEmpty && (session.prompts.length === 0 || session.edits.length === 0)) continue;
 
-    const report: SessionReport = {
+    // The spike always asks the model fresh (no cache), so its output stays comparable between runs.
+    const result = await reviewSession({
+      ctx,
       session,
-      repo: root,
-      range: null,
-      facts: null,
-      provenance: null,
-      ledger: { intents: [], claims: [], confidence: "low", notes: "", backend: "none", costUsd: null, error: null },
-      tests: checkTests(session, root, roots),
-      flags: new Map(),
-      error: null,
-    };
-    try {
-      const change = sessionChange(root, session, { base: args.base, head: args.head });
-      if (change) {
-        report.range = { label: change.label };
-        const files = change.files;
-        report.facts = extractFacts(files);
-        report.provenance = traceProvenance(root, session, files, change.roots, othersFor(session));
-      }
-    } catch (e) {
-      report.error = (e as Error).message;
-    }
-    process.stdout.write(
-      `- ${session.id.slice(0, 8)}: ${session.prompts.length} prompts, ${session.edits.length} edits${session.subagentFiles ? ` (${session.edits.filter((e) => e.subagent).length} by ${session.subagentFiles} subagent(s))` : ""}`,
-    );
-    report.ledger = buildIntentLedger(session, root, modelOk);
+      ledger: modelOk ? "model" : "none",
+      base: args.base,
+      head: args.head,
+      onLedgerStart: () =>
+        process.stdout.write(
+          `- ${session.id.slice(0, 8)}: ${session.prompts.length} prompts, ${session.edits.length} edits${session.subagentFiles ? ` (${session.edits.filter((e) => e.subagent).length} by ${session.subagentFiles} subagent(s))` : ""}`,
+        ),
+    });
+    const report = result.report;
     totalCost += report.ledger.costUsd ?? 0;
-    if (report.provenance && report.facts) {
-      // Scope uses your prompts plus the intent ledger's task lines (which resolve "yes"/"do it" to what was proposed).
-      report.scope = classifyScope({
-        provenance: report.provenance,
-        prompts: session.prompts,
-        extraText: report.ledger.intents.filter((i) => i.kind === "task" && i.status === "active").map((i) => i.text),
-        roots,
-        repoPaths,
-      });
-      report.flags = fileFlags(report.provenance, report.facts, report.scope);
-    }
-    if (report.ledger.intents.length) {
-      report.verdicts = judgeIntents(session, report.ledger.intents, report.provenance, report.scope ?? null);
-      report.claims = checkClaims(session, report.ledger.intents, report.verdicts);
-    }
 
     const file = join(outDir, `${session.startedAt.slice(0, 10)}-${session.id.slice(0, 8)}.md`);
-    writeFileSync(file, renderSession(report), "utf8");
+    writeFileSync(file, result.markdown, "utf8");
     const undisclosed = [...report.flags.values()].filter((f) => f.includes("undisclosed")).length;
     const against = [...report.flags.values()].filter((f) => f.includes("against-instruction")).length;
     const cov = report.provenance?.coverage;
@@ -232,4 +152,4 @@ function main() {
   if (done === 0) console.log("No sessions with both prompts and edits. Try --include-empty or another repo.");
 }
 
-main();
+await main();

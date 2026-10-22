@@ -1,0 +1,11 @@
+{
+  "name": "offscript",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Did your coding agent do what you asked, only what you asked, and did it tell you the truth? Review a Claude Code session from the terminal.",
+  "bin": {
+    "offscript": "src/main.ts"
+  }
+}

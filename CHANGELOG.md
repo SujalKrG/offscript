@@ -5,6 +5,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Fixed
+- `offscript review` exits 0 by default. `--fail-on` now defaults to `never`; use `--fail-on problems` or `any` in CI to get exit code 1. A normal interactive review no longer makes `bun run` print "error: script exited with code 1".
+- False "against your instruction" and "violated" results. A file constraint must be a real "leave it alone" instruction: a touch verb (touch, change, modify, edit, rewrite, refactor, delete, remove, rename, move) after a negation, "leave X alone", or "keep X as is". "Without breaking them", "keep the apps working", "only capture screenshots" and "edited like the other apps" are goals and come out as "not checked". A file that another active request anchors is no longer flagged against an instruction.
+- The offline ledger (`--no-llm`) no longer turns harness prompts (`[Request interrupted...]`, `<command-...>`, `Caveat:`, local command output) into requests.
+- Terminal view uses the real terminal width (default 100, minimum 60): the quote gets about 40% of the line, the evidence the rest, cut on a word boundary with "...". The reason for an unexplained file no longer repeats itself.
+
 ### Added
 - Claim check (report section 2a): claims in the agent's replies (tests pass, type check clean, committed, pushed, PR opened, merged, deployed, built, fixed, "only touched X", "everything is done") are checked against evidence from before the reply: verified, contradicted, stale (tests passed, then more edits), overstated, unsupported or unverified. **Silent gaps** list requests left unfinished that the agent never mentioned. Deterministic, following OverclaimBench and Advani 2026; notes in `research/claim-checks.md`.
 - Verdict per request (report section 1b): done, partly done, failed, not done, not in change, answered, or needs judgment for tasks; kept or violated for constraints. Decided from independent evidence in that request's turns (code that landed, commit/push/PR/merge/test/type-check/build/deploy commands and whether they succeeded, substantive replies), never from the agent's own summary. Files no request explains are listed as extra work. Commands you ran yourself with Claude Code's `!` shell count as evidence (marked "you ran") and are no longer treated as prompts. When a test or deploy request shows no recognised run, the verdict lists the commands that did run.
@@ -20,7 +26,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Industry-grade CI: Biome lint and format, strict types, tests on Linux, macOS and Windows with an 85% coverage gate, dependency audit, TruffleHog secret scan, `typos`, actionlint and zizmor on workflows, CodeQL for code and workflows, dependency review, OpenSSF Scorecard, Dependabot with a 7-day cooldown, and a single required `CI OK` check. Every action is pinned to a commit hash; every job has least-privilege permissions.
 - `bun run check` runs CI's required checks locally.
 
+- `offscript` command line (`packages/cli`, run with `bun run offscript`; no new dependencies):
+  - `offscript review [session-id-prefix]` reviews the latest session in the repo (or the one named) and prints a short terminal view: three headline answers (did what you asked, only what you asked, told the truth), then at most 8 problems with one line of evidence each. `--full` prints every request, claim and flagged file. Piped output and `NO_COLOR` get plain ASCII glyphs; a UTF-8 terminal gets colour and Unicode. The markdown report is always written, by default to `.offscript/reports/<date>-<id>.md` (`--md <file>` moves it).
+  - `--json` prints a machine-readable result with `schemaVersion: 1`. `--fail-on never|problems|any` sets the exit code: 0 ok, 1 problems found, 2 usage error, 3 no session found.
+  - `--no-llm` runs fully offline: a heuristic ledger makes one request per prompt that is not a follow-up ("yes", "go ahead"), and no `claude` process is started. Without the Claude Code CLI, or when the model call fails, the review falls back to it and says so.
+  - `offscript list` shows the repo's sessions (id, date, prompts, edits).
+  - `offscript hook install [--project|--user]` merges a SessionEnd hook (`"timeout": 60`) into Claude Code settings without touching other keys; running it again changes nothing. `offscript review --hook` reads the hook's JSON from stdin, reviews exactly that session, writes the report and prints one line (a `systemMessage`). A hook never fails a session end: every error becomes that one line and exit code 0.
+- Intent ledger cache: the model result is stored by content (model, prompt version, your prompts, rules file, the agent's last message), so reviewing the same session again is instant and free. Entries are written atomically (tmp file, then rename) under `$XDG_CACHE_HOME/offscript`, `~/.cache/offscript` or `%LOCALAPPDATA%\offscript` (`OFFSCRIPT_CACHE_DIR` overrides). Failed model calls are never cached.
+- `reviewSession()` in `packages/core/src/review.ts` holds the review pipeline that used to live in the spike script; the spike and the CLI share it.
+
 ### Changed
+- `spike.ts` now calls `reviewSession()`; its output is unchanged.
 - Removed the `unrequested?` flag, which fired on almost every file; the report's scope column says why each file is in scope instead.
 - Codebase formatted with Biome; a few lint findings fixed (assignments inside expressions, a comma operator, unneeded regex escapes).
 - Test fixture builds its fake API key at runtime, so no key-shaped text appears in the source.

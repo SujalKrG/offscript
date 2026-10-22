@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { redact } from "../redact.ts";
 
 export interface JudgeResult<T> {
   ok: boolean;
@@ -20,7 +21,7 @@ export interface JudgeResult<T> {
   attempt: string;
 }
 
-interface Candidate {
+export interface Candidate {
   cmd: string;
   shell: boolean;
 }
@@ -42,6 +43,14 @@ function quoteForCmd(a: string): string {
   return `"${a.replace(/"/g, '\\"')}"`;
 }
 
+/** The program to spawn. Through cmd.exe it must be quoted too, or a path with a space ("C:\\Users\\Jo Smith\\...\\claude.cmd") splits. */
+export function spawnTarget(c: Candidate): string {
+  return c.shell ? quoteForCmd(c.cmd) : c.cmd;
+}
+
+/** Whatever the CLI printed can echo the prompt, so errors that reach the terminal, JSON or a report are redacted first. */
+const safe = (s: string) => redact(s).text;
+
 export function extractJson(text: string): unknown {
   const stripped = text.replace(/```(?:json)?/gi, "").trim();
   const start = stripped.indexOf("{");
@@ -50,16 +59,39 @@ export function extractJson(text: string): unknown {
   return JSON.parse(stripped.slice(start, end + 1));
 }
 
+/** Best effort: on Windows a just-killed child can hold the directory for a moment. A cleanup failure must never fail a review. */
+function cleanup(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    // leave it for the OS temp cleaner
+  }
+}
+
+/** spawnSync's timeout kills only the direct child. On Windows that is cmd.exe, and the real claude process would live on holding the temp dir. */
+function killTree(pid: number | undefined): void {
+  if (process.platform !== "win32" || !pid) return;
+  try {
+    spawnSync("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 10_000 });
+  } catch {
+    // already gone
+  }
+}
+
 export function claudeAvailable(): boolean {
   for (const c of candidates()) {
-    const r = spawnSync(c.cmd, ["--version"], { encoding: "utf8", shell: c.shell, windowsHide: true, timeout: 20000 });
+    const r = spawnSync(spawnTarget(c), ["--version"], { encoding: "utf8", shell: c.shell, windowsHide: true, timeout: 20000 });
     if (r.status === 0) return true;
   }
   return false;
 }
 
+export function judgeModel(): string {
+  return process.env.OFFSCRIPT_MODEL ?? "haiku";
+}
+
 export function runClaudeJson<T>(opts: { system: string; input: string; model?: string; timeoutMs?: number; validate?: (v: unknown) => T }): JudgeResult<T> {
-  const model = opts.model ?? process.env.OFFSCRIPT_MODEL ?? "haiku";
+  const model = opts.model ?? judgeModel();
   const dir = mkdtempSync(join(tmpdir(), "offscript-judge-"));
   const sysPath = join(dir, "system.txt");
   writeFileSync(sysPath, opts.system, "utf8");
@@ -79,7 +111,7 @@ export function runClaudeJson<T>(opts: { system: string; input: string; model?: 
     for (const c of candidates()) {
       for (const a of attempts) {
         const args = c.shell ? a.args.map(quoteForCmd) : a.args;
-        const r = spawnSync(c.cmd, args, {
+        const r = spawnSync(spawnTarget(c), args, {
           input: opts.input,
           cwd: dir,
           encoding: "utf8",
@@ -90,34 +122,45 @@ export function runClaudeJson<T>(opts: { system: string; input: string; model?: 
           env: { ...process.env, OFFSCRIPT_INNER: "1" },
         });
         if (r.error && (r.error as NodeJS.ErrnoException).code === "ENOENT") break; // try next binary
+        // A timeout is not an old-CLI problem: retrying with fewer flags would only wait the full timeout again, twice more.
+        if (r.error && (r.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+          killTree(r.pid);
+          return {
+            ok: false,
+            value: null,
+            costUsd: null,
+            error: `${a.name}: claude CLI timed out after ${Math.round((opts.timeoutMs ?? 240_000) / 1000)}s`,
+            attempt: a.name,
+          };
+        }
         const stdout = (r.stdout ?? "").trim();
         const stderr = (r.stderr ?? "").trim();
         if (r.status !== 0 && /unknown option|unrecognized|unexpected argument|error: option/i.test(stderr + stdout)) {
-          lastError = `${a.name}: ${(stderr || stdout).slice(0, 300)}`;
+          lastError = `${a.name}: ${safe((stderr || stdout).slice(0, 300))}`;
           continue; // older CLI: retry with fewer flags
         }
         let envelope: any;
         try {
           envelope = JSON.parse(stdout);
         } catch {
-          lastError = `${a.name}: CLI did not return JSON (exit ${r.status}): ${(stderr || stdout).slice(0, 300)}`;
+          lastError = `${a.name}: CLI did not return JSON (exit ${r.status}): ${safe((stderr || stdout).slice(0, 300))}`;
           continue;
         }
         const cost = typeof envelope.total_cost_usd === "number" ? envelope.total_cost_usd : null;
         if (envelope.is_error) {
-          return { ok: false, value: null, costUsd: cost, error: String(envelope.result ?? "model error").slice(0, 500), attempt: a.name };
+          return { ok: false, value: null, costUsd: cost, error: safe(String(envelope.result ?? "model error").slice(0, 500)), attempt: a.name };
         }
         try {
           const parsed = extractJson(String(envelope.result ?? ""));
           const value = opts.validate ? opts.validate(parsed) : (parsed as T);
           return { ok: true, value, costUsd: cost, error: null, attempt: a.name };
         } catch (e) {
-          return { ok: false, value: null, costUsd: cost, error: `bad model output: ${(e as Error).message}`, attempt: a.name };
+          return { ok: false, value: null, costUsd: cost, error: safe(`bad model output: ${(e as Error).message}`), attempt: a.name };
         }
       }
     }
     return { ok: false, value: null, costUsd: null, error: lastError, attempt: "none" };
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    cleanup(dir);
   }
 }

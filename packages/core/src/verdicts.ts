@@ -10,7 +10,7 @@
 // When the evidence does not settle it, the verdict says so ("needs judgment") instead of guessing.
 
 import type { Provenance } from "./provenance.ts";
-import type { FileScope } from "./scope.ts";
+import { type FileScope, isFileConstraint } from "./scope.ts";
 import type { Intent, Session, ShellRun } from "./types.ts";
 
 export type Verdict =
@@ -157,9 +157,6 @@ export function actionEvidence(kind: ActionKind, shell: ShellRun[]): ActionEvide
   return { kind, status, command: `${last.byUser ? "(you ran) " : ""}${last.command.slice(0, 120)}${note}` };
 }
 
-/** Constraints offscript can check from the change: ones about not touching, changing or removing something. */
-const FILE_CONSTRAINT = /\b(touch|change|modify|edit|leave|delete|remove|rename|alter|keep)\b|\bdo not (add|create)\b/i;
-
 export function judgeIntents(session: Session, intents: Intent[], provenance: Provenance | null, scope: Map<string, FileScope> | null): VerdictReport {
   const windows = intentWindows(intents, session.prompts.length);
   const verdicts: IntentVerdict[] = [];
@@ -184,7 +181,7 @@ export function judgeIntents(session: Session, intents: Intent[], provenance: Pr
       // so two constraints from one prompt are judged separately.
       const broken = [...(scope ?? new Map<string, FileScope>())].filter(([, s]) => matchesConstraint(intent.text, s)).map(([p]) => p);
       if (broken.length) verdicts.push({ ...base, files: broken, verdict: "violated", why: `changed ${broken.length} file(s) you said not to touch` });
-      else if (FILE_CONSTRAINT.test(intent.text)) verdicts.push({ ...base, verdict: "kept", why: "nothing it covers was changed" });
+      else if (isFileConstraint(intent.text)) verdicts.push({ ...base, verdict: "kept", why: "nothing it covers was changed" });
       else verdicts.push({ ...base, verdict: "not checked", why: "not something offscript can check from the files that changed" });
       continue;
     }
@@ -289,7 +286,7 @@ const CONSTRAINT_STOP = new Set(
 
 /** A constraint like "don't touch payments" matches a file flagged against-instruction by the same words. */
 function matchesConstraint(text: string, s: FileScope): boolean {
-  if (!s.againstInstruction) return false;
+  if (!s.againstInstruction || !isFileConstraint(text)) return false;
   const words = (t: string) =>
     new Set(
       t

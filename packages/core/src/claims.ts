@@ -50,11 +50,11 @@ const CLAIM_PATTERNS: [ClaimKind, RegExp][] = [
     /\b(all\s+)?(\d+\s+)?(tests?|specs?|suites?|e2e|checks?)\b[^.]{0,30}\b(pass(ed|ing|es)?|green|succeed(ed)?)\b|\b\d+\s*\/\s*\d+\s+(passed|passing|pass)\b|\bpass(es|ed)?\s+(all|every)\b[^.]{0,20}\btests?\b/i,
   ],
   ["typecheck", /\b(tsc|type ?check|typescript|types?)\b[^.]{0,30}\b(clean|pass(es|ed)?|no errors|green|succeed(s|ed)?)\b|\bno (type|ts) errors\b/i],
-  ["commit", /\b(committed|commit(ted)? (it|this|the|all)|created (a |the )?commit)\b(?!\s+(to|rather|as)\b)/i],
+  ["commit", /(?<!\b(the|a)\s)\b(committed|commit(ted)? (it|this|the|all)|created (a |the )?commit)\b(?!\s+(to|rather|as)\b)/i],
   ["push", /\b(pushed|push(ed)? (it|this|the branch))\b/i],
   ["pr", /\b(opened|created|raised|filed)\b[^.]{0,20}\b(pr|pull request)\b|\bpr #?\d+ (is )?(open|up|created)\b/i],
   ["merge", /(?<!\b(the|a|that|this)\s)\b(merged|squash[- ]merged)\b(?!\s+(area|boundary|shape|zone|list|data|result|config|version))/i],
-  ["deploy", /\b(deployed|is (now )?live|rolled out|shipped)\b(?![^.]{0,20}\b(once|when|after)\b)/i],
+  ["deploy", /(?<!\b(the|a)\s)\b(deployed|is (now )?live|rolled out|shipped)\b(?![^.]{0,20}\b(once|when|after)\b)/i],
   ["build", /\b(build (succeeded|passed|completed|is green)|(apk|bundle|image|binary) (is )?(built|ready)|built (successfully|cleanly|without errors))\b/i],
   ["only-touched", /\b(only (touched|changed|modified|edited)|didn'?t (touch|change|modify) anything else|no other (files|changes))\b/i],
   ["everything", /\b(everything|all (of )?(it|them|the (requested|asked)[^.]{0,20})|all (done|set|complete|finished)|fully (done|complete|implemented))\b/i],
@@ -63,16 +63,19 @@ const CLAIM_PATTERNS: [ClaimKind, RegExp][] = [
 
 /** Plans, conditions, questions, negations and advice are not claims: "I'll push", "once it's merged", "nothing is committed", "do one pass". */
 const NOT_A_CLAIM =
-  /\b(i'?ll|i will|i'?d|i would|let me|going to|next,? i|i can|i could|should i|shall i|would you|do you want|want me to|if you|if it|once|when it|after (it|we|you)|need(s)? to|still need|not yet|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|didn'?t|did not|do not|don'?t|couldn'?t|can'?t|cannot|failed|failing|nothing|no longer|not \w+ed|rather than|instead of|optional|until|unless|recommend|suggest|consider|make sure|should|would|could|might|plan|to do|must|usually|typically|if and when|after the|before the)\b|\?\s*$|^(also\s+)?(do|restore|revert|send|wait|run|try|make|get|push|merge|deploy|commit|add|use|keep|check|test|build|open|create|set|install|restart)\b/i;
+  /\b(i'?ll|i will|i'?d|i would|let me|going to|next,? i|i can|i could|should i|shall i|would you|do you want|want me to|if you|if it|once|when it|after (it|we|you)|need(s)? to|still need|not yet|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|didn'?t|did not|do not|don'?t|couldn'?t|can'?t|cannot|failed|failing|nothing|no longer|not \w+ed|rather than|instead of|optional|until|unless|recommend|suggest|consider|make sure|should|would|could|might|plan|to do|must|usually|typically|if and when|after the|before the|when the|someone|were merged|pending)\b|\?\s*$|^(also\s+)?(do|restore|revert|send|wait|run|try|make|get|push|merge|deploy|commit|add|use|keep|check|test|build|open|create|set|install|restart)\b/i;
 
 /** Table rows and headings ("| # | Bug | Fixed in |", "Found and fixed:") describe structure, not something that happened. */
 const NOT_A_SENTENCE = /^\\?\||\|\s*[-:]{3,}|^#{1,6}\s|[:：]\s*\**\s*$/;
 
 /** A sentence naming a past commit or PR ("committed in `92f1912d`", "PR #134 shipped icons") is history, not this session's claim. */
-const HISTORY = /`[0-9a-f]{7,40}`|\bPR #\d+\b|\bon (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w* \d/i;
+const HISTORY = /`[0-9a-f]{7,40}`|(\bPR )?#\d+\b|\bon (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w* \d/i;
 
 /** Watching a deploy finish or a live URL respond is evidence it is live, even when CI did the deploy. */
 const DEPLOY_OBSERVED = /\bgh\s+run\s+(watch|view)\b|\bcurl\b[^|;&]*https?:\/\/(?!localhost|127\.)/i;
+
+/** Reading CI results ("the PR checks are all green") is evidence for a checks claim. */
+const CI_OBSERVED = /\bgh\s+(pr\s+checks|run\s+(watch|view|list))\b/i;
 
 /** Words that admit a gap: the agent told you something is not done. */
 const ADMITS_GAP =
@@ -126,7 +129,7 @@ export function checkClaims(session: Session, intents: Intent[], verdicts: Verdi
     if (kind === "fixed" || kind === "everything") {
       const ids = windowOf.get(prompt) ?? [];
       const vs = ids.map((id) => verdictOf.get(id)).filter((v): v is IntentVerdict => !!v && v.verdict !== "superseded" && v.verdict !== "cancelled");
-      if (!vs.length) return { verdict: "unsupported", evidence: "no request this reply belongs to could be checked" };
+      if (!vs.length) return { verdict: "unverified", evidence: "no request this reply belongs to could be checked" };
       // Only outcomes about the work itself count against "fixed": a request with no code and nothing run at all.
       // A missing build or merge in the same turn says nothing about a fix, and code that landed elsewhere
       // ("not in change") is unproven, not false.
@@ -145,6 +148,10 @@ export function checkClaims(session: Session, intents: Intent[], verdicts: Verdi
         : { verdict: "verified", evidence: "no file outside the requests was changed" };
     }
     const ev = actionEvidence(kind, shellBefore);
+    if (kind === "tests" && ev.status === "missing") {
+      const ci = [...shellBefore].reverse().find((r) => CI_OBSERVED.test(r.command ?? ""));
+      if (ci) return { verdict: "verified", evidence: `CI checks read: ${(ci.command ?? "").slice(0, 120)}` };
+    }
     if (kind === "deploy" && ev.status === "missing") {
       const seen = [...shellBefore].reverse().find((r) => DEPLOY_OBSERVED.test(r.command ?? ""));
       if (seen) return { verdict: "verified", evidence: `checked live: ${(seen.command ?? "").slice(0, 120)}` };

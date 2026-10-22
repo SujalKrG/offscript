@@ -9,6 +9,7 @@
     "packages/*"
   ],
   "scripts": {
+    "offscript": "bun packages/cli/src/main.ts",
     "spike": "bun packages/core/src/spike.ts",
     "spike:score": "bun packages/core/src/score-labels.ts",
     "test": "bun test",
