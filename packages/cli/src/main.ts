@@ -8,6 +8,7 @@
 //
 // Exit codes: 0 reviewed (default, or --fail-on never), 1 problems found (only with --fail-on problems|any), 2 usage error, 3 no session found, 4 unexpected failure.
 
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -391,9 +392,10 @@ async function exportTrace(values: Values, prefix: string | undefined, io: Io): 
     mkdirSync(outDir, { recursive: true });
     for (const r of records) {
       const file = join(outDir, `${r.vcs.revision}.json`);
-      const tmp = `${file}.tmp-${process.pid}`;
+      // Random name and "wx" (create exclusively): a planted file or symlink at this path makes the write fail, never follow.
+      const tmp = `${file}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`;
       try {
-        writeFileSync(tmp, `${JSON.stringify(r, null, 2)}\n`, "utf8");
+        writeFileSync(tmp, `${JSON.stringify(r, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
         renameSync(tmp, file);
       } catch (e) {
         rmSync(tmp, { force: true });

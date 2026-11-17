@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { validateTraceRecord } from "../../core/src/trace-validate.ts";
 import { World } from "../../core/test/trace-world.ts";
@@ -170,6 +170,21 @@ describe("export", () => {
     const r = await cli(t.w.repo, t.config, ["export", "aaaa1111", "--out", dir]);
     expect(r.code).toBe(4);
     expect(readdirSync(dir)).toEqual([`${t.sha}.json`]);
+  });
+
+  test("a symlink planted at the old temporary name is never followed, so the file it points to is not overwritten", async () => {
+    const dir = emptyDir("planted");
+    const victim = join(emptyDir("victim"), "precious.txt");
+    writeFileSync(victim, "keep me\n");
+    try {
+      symlinkSync(victim, join(dir, `${t.sha}.json.tmp-${process.pid}`), "file");
+    } catch {
+      return; // this machine cannot create file symlinks (Windows without developer mode); Linux, macOS and Windows CI can
+    }
+    const r = await cli(t.w.repo, t.config, ["export", "aaaa1111", "--out", dir]);
+    expect(r.code).toBe(0);
+    expect(readFileSync(victim, "utf8")).toBe("keep me\n");
+    expect(lstatSync(join(dir, `${t.sha}.json`)).isSymbolicLink()).toBe(false);
   });
 
   test("USAGE documents export and the MIME type, and list --json reports the shared schema version", () => {
