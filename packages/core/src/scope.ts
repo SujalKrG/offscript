@@ -8,7 +8,7 @@
 //   4. drift     everything else the agent touched
 // Plus one check the others lack: files whose name appears in an instruction NOT to touch them.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { DEFAULT_SENSITIVE } from "./facts.ts";
 import type { FileProvenance, Provenance } from "./provenance.ts";
@@ -156,10 +156,15 @@ function importsOf(path: string, content: string, changed: string[]): string[] {
 function readFileFromRoots(rel: string, roots: string[]): string | null {
   for (const r of roots) {
     const p = join(r, rel);
+    let fd: number | null = null;
     try {
-      if (existsSync(p) && statSync(p).size < 2 * 1024 * 1024) return readFileSync(p, "utf8");
+      // Open once and check the size of that same handle, so the file cannot change between the check and the read.
+      fd = openSync(p, "r");
+      if (fstatSync(fd).size < 2 * 1024 * 1024) return readFileSync(fd, "utf8");
     } catch {
-      // unreadable: fall through
+      // missing or unreadable: fall through
+    } finally {
+      if (fd !== null) closeSync(fd);
     }
   }
   return null;

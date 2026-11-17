@@ -69,6 +69,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Git is always run with `--no-optional-locks`, so offscript never leaves lock files in your repo.
 - Paths are compared after resolving symlinks and short names, so sessions are found when the repo is reached through a symlink (macOS `/var` vs `/private/var`) or a different spelling of the same folder.
 
+### Security
+- Fixed CodeQL alerts found by code scanning: the git option patterns used to recognise commands could backtrack exponentially on hostile input (`js/redos`, now linear time); backslashes are escaped in the `cmd.exe` argument quoting, the hook command and the Markdown table cells (`js/incomplete-sanitization`); and files are read through a single open handle, so their size cannot change between the check and the read (`js/file-system-race`).
+- `SECURITY.md` links directly to the private vulnerability report form.
 ## [0.0.1] - 2026-10-12
 
 First spike.
