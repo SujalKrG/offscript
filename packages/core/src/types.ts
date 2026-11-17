@@ -26,6 +26,7 @@ export interface FileEdit {
   failed: boolean;
   timestamp?: string; // when the tool call was made
   subagent?: string; // set when a subagent (Task tool) made the edit
+  model?: string; // message.model of the assistant turn that made the call, when the transcript records it
 }
 
 export interface ShellRun {

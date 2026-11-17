@@ -61,6 +61,10 @@ export interface SessionChange {
   uncommittedFiles: string[];
   files: DiffFile[];
   roots: string[];
+  /** Each picked commit on its own: its added lines carry that commit's post-image line numbers. Only files the session edited. */
+  commitDiffs: { sha: string; files: DiffFile[] }[];
+  /** Non-blank lines the session added that are not in any picked commit (working tree only). */
+  uncommittedAddedLines: number;
 }
 
 const SLACK_BEFORE_MS = 10 * 60 * 1000;
@@ -78,7 +82,15 @@ export function sessionChange(repo: string, session: Session, o: RangeOverrides 
   const roots = worktreeRoots(repo);
   if (o.base) {
     const range: DiffRange = { base: o.base, head: o.head ?? null, label: "", commits: [] };
-    return { label: `${o.base}..${o.head ?? "working tree"} (manual)`, commits: [], uncommittedFiles: [], files: diff(repo, range), roots };
+    return {
+      label: `${o.base}..${o.head ?? "working tree"} (manual)`,
+      commits: [],
+      uncommittedFiles: [],
+      files: diff(repo, range),
+      roots,
+      commitDiffs: [],
+      uncommittedAddedLines: 0,
+    };
   }
   const resolve = makeRelResolver(roots);
   const edited = new Map<string, Set<string>>(); // rel path -> worktree roots it was edited in
@@ -135,10 +147,13 @@ export function sessionChange(repo: string, session: Session, o: RangeOverrides 
   const otherFiles = new Set<string>();
   const byPath = new Map<string, DiffFile>();
   const key = (t: string) => t.replace(/\r$/, "").trim();
+  let uncommittedAdded = 0;
+  const nonBlank = (ls: { text: string }[]) => ls.filter((l) => key(l.text) !== "").length;
   const add = (fs: DiffFile[], mode: "net" | "dedupe") => {
     for (const f of fs) {
       const prev = byPath.get(f.path) ?? (f.oldPath ? byPath.get(f.oldPath) : undefined);
       if (!prev) {
+        if (mode === "dedupe") uncommittedAdded += nonBlank(f.added);
         byPath.set(f.path, { ...f, added: [...f.added], removed: [...f.removed] });
         continue;
       }
@@ -161,15 +176,19 @@ export function sessionChange(repo: string, session: Session, o: RangeOverrides 
         // Uncommitted edits often repeat what a picked commit already added (the same content checked out
         // or copied to another worktree). Count each occurrence once: a multiset difference, so repeated
         // lines such as "}" are not collapsed.
-        prev.added.push(...multisetExtra(f.added, prev.added));
+        const extra = multisetExtra(f.added, prev.added);
+        uncommittedAdded += nonBlank(extra);
+        prev.added.push(...extra);
         prev.removed.push(...multisetExtra(f.removed, prev.removed));
       }
       if (f.status === "deleted") prev.status = "deleted";
       prev.binary = prev.binary || f.binary;
     }
   };
-  for (const { files } of showCommits(repo, picked)) {
+  const commitDiffs: SessionChange["commitDiffs"] = [];
+  for (const { sha, files } of showCommits(repo, picked)) {
     const mine = mineOnly(files);
+    commitDiffs.push({ sha, files: mine });
     for (const f of files) if (!mine.includes(f)) otherFiles.add(f.path);
     add(mine, "net");
   }
@@ -231,7 +250,15 @@ export function sessionChange(repo: string, session: Session, o: RangeOverrides 
     );
   }
   if (otherFiles.size) parts.push(`${otherFiles.size} other file(s) in those commits left out (not edited in this session)`);
-  return { label: parts.join(" + "), commits: picked, uncommittedFiles: uncommitted, files: [...byPath.values()], roots };
+  return {
+    label: parts.join(" + "),
+    commits: picked,
+    uncommittedFiles: uncommitted,
+    files: [...byPath.values()],
+    roots,
+    commitDiffs,
+    uncommittedAddedLines: uncommittedAdded,
+  };
 }
 
 function dirtyFiles(repo: string): Map<string, string> {
@@ -376,7 +403,11 @@ function untrackedAsAdded(repo: string, rels: string[]): DiffFile[] {
 }
 
 function stripPrefix(p: string): string {
-  return p.replace(/^"|"$/g, "").replace(/^[ab]\//, "");
+  // git appends a tab after a path that holds a space on ---/+++ lines.
+  return p
+    .replace(/\t.*$/, "")
+    .replace(/^"|"$/g, "")
+    .replace(/^[ab]\//, "");
 }
 
 export function parseUnifiedDiff(text: string): DiffFile[] {
@@ -384,8 +415,30 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
   let cur: DiffFile | null = null;
   let newLine = 0;
   let oldLine = 0;
+  // Lines left in the current hunk (from its @@ header). Inside a hunk "--- x" is a removed line "-- x"
+  // (SQL, Lua comments), not a file header.
+  let oldLeft = 0;
+  let newLeft = 0;
   for (const line of text.split("\n")) {
+    if (cur && newLeft > 0 && line.startsWith("+")) {
+      cur.added.push({ file: cur.path, newLineNo: newLine++, text: line.slice(1) });
+      newLeft--;
+      continue;
+    }
+    if (cur && oldLeft > 0 && line.startsWith("-")) {
+      cur.removed.push({ file: cur.oldPath ?? cur.path, oldLineNo: oldLine++, text: line.slice(1) });
+      oldLeft--;
+      continue;
+    }
+    if (cur && oldLeft > 0 && newLeft > 0 && line.startsWith(" ")) {
+      oldLeft--;
+      newLeft--;
+      oldLine++;
+      newLine++;
+      continue;
+    }
     if (line.startsWith("diff --git ")) {
+      oldLeft = newLeft = 0;
       const m = /^diff --git (?:"?a\/(.+?)"?) (?:"?b\/(.+?)"?)$/.exec(line);
       cur = {
         path: m?.[2] ?? "",
@@ -414,9 +467,11 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       if (p !== "/dev/null") cur.path = stripPrefix(p);
       else cur.path = cur.oldPath ?? cur.path;
     } else if (line.startsWith("@@")) {
-      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+      const m = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
       oldLine = Number(m?.[1] ?? 0);
-      newLine = Number(m?.[2] ?? 0);
+      newLine = Number(m?.[3] ?? 0);
+      oldLeft = Number(m?.[2] ?? 1);
+      newLeft = Number(m?.[4] ?? 1);
     } else if (line.startsWith("+")) {
       cur.added.push({ file: cur.path, newLineNo: newLine++, text: line.slice(1) });
     } else if (line.startsWith("-")) {

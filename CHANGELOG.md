@@ -53,6 +53,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - All of a session's commits are read in one `git show`. Commits beyond the 200 limit are named in the report instead of dropped silently. Transcripts that ended before a session's window are skipped without parsing.
 - Claude Code record types `file-history-delta` and `pr-link` are recognised.
 
+#### Trace export
+- `offscript export [session-id-prefix] [--repo <path>] [--out <dir>]` writes [Agent Trace](https://agent-trace.dev/) records, one per commit in the session's change. They are rebuilt from the finished transcript, not captured live, and each record says so (`metadata.derivation: "transcript"`). Default output is a JSON array on stdout with the summary and warnings on stderr; `--out` writes `<dir>/<sha>.json` atomically and never writes into `.git`. Session choice and exit codes match `review`.
+- A line is credited only when an edit, a Claude Code file backup or a recorded shell write explains it. Lines nothing explains are counted as unresolved and left out; uncommitted lines have no revision and are skipped and counted. The `human` contributor type is never written.
+- Records are checked against a vendored copy of the published schema (`packages/core/src/trace-schema.json`, SHA-256 recorded in a test) with a small validator in the repo. A record that fails validation is exit 4. No new dependencies.
+- The assistant model (`message.model`) is now read from the transcript and kept on each edit, subagent edits included. It becomes `model_id` as `anthropic/<model>`.
+- Interpretation choices (version `"0.1"`, no `content_hash`, `tool` only when the Claude Code version is known, our data under a `metadata` key) are listed in the README.
+- Tests include a seeded model-based generator that builds sessions and git repos (inserts, replaces, amends, renames, a second session, uncommitted work), computes the expected attribution on its own and compares it with the export, plus a round trip against `git show`.
+
 #### CI and repo
 - README with logo, demo, comparison table and roadmap. Contributing guide, code of conduct, security policy, issue forms, pull request template. Social preview image, `.gitattributes` and `.editorconfig`.
 - CI: Biome lint and format, strict types, tests on Linux, macOS and Windows with an 85% coverage gate, dependency audit, TruffleHog secret scan, `typos`, actionlint and zizmor on workflows, CodeQL for code and workflows, dependency review, OpenSSF Scorecard, Dependabot with a 7-day cooldown, and a single required `CI OK` check. Every action is pinned to a commit hash; every job has least-privilege permissions.
@@ -60,6 +68,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Codebase formatted with Biome, with a few lint findings fixed.
 
 ### Changed
+- Line provenance has one matcher (`creditFile`) shared by `review` and `export`. It credits a run of added lines to an edit only when the edit's added lines contain that run in order, so a lone trivial line such as `}` is no longer credited on its own. The numbers on the test fixtures are unchanged; on real sessions, lone lines of that kind that used to count as traced can now count as untraced. Edits made under a file's old name are used after a rename.
+- `list --json` takes its `schemaVersion` from the shared constant instead of a hardcoded `1`. The value is the same.
 - The spike (`bun run spike`) now calls `reviewSession()`; its output is unchanged.
 - Removed the spike's `unrequested?` flag, which fired on almost every file. The report's scope column says why each file is in scope instead.
 
