@@ -61,7 +61,8 @@ export const HOOK_STDIN_TIMEOUT_MS = 5_000;
  * its backslashes, so the path is written with forward slashes, which Windows accepts everywhere.
  */
 export function hookCommand(mainPath: string): string {
-  const p = mainPath.replace(/\\/g, "/").replace(/(["$`])/g, "\\$1");
+  // One pass: backslash becomes slash, and the characters special inside double quotes get a backslash.
+  const p = mainPath.replace(/[\\"$`]/g, (c) => (c === "\\" ? "/" : `\\${c}`));
   return `bun "${p}" review --hook`;
 }
 

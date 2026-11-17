@@ -13,7 +13,7 @@ offscript reads coding-agent session transcripts. Those transcripts can contain 
 
 **Please do not open a public issue for security problems.**
 
-Report privately through GitHub: go to the repository's **Security** tab and choose **Report a vulnerability**. You'll get an acknowledgement within 72 hours and a status update within 7 days.
+Report privately through GitHub: open https://github.com/SujalKrG/offscript/security/advisories/new (the repository's **Security** tab, then **Report a vulnerability**). You'll get an acknowledgement within 72 hours and a status update within 7 days.
 
 Include:
 - what you found and why it matters,

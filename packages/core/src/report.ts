@@ -29,7 +29,7 @@ const scopeCell = (s: FileScope | undefined) => {
   const base = `${s.kind}: ${esc(s.reason)}`;
   return s.againstInstruction ? `${base}; you said: "${esc(s.againstInstruction.text)}" (prompt ${s.againstInstruction.prompt})` : base;
 };
-const esc = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+const esc = (s: string) => s.replace(/[\\|]/g, "\\$&").replace(/\r?\n/g, " ");
 const pct = (n: number | null) => (n === null ? "n/a" : `${Math.round(n * 100)}%`);
 
 export function renderSession(r: SessionReport): string {

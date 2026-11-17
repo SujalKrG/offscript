@@ -108,16 +108,16 @@ function withoutNegations(text: string): string {
 
 /** What a command did. Matched on the command itself, not on file names that happen to contain the word. */
 const ACTION_RAN: Record<ActionKind, RegExp> = {
-  commit: /\bgit\s+(-[^\s]+\s+(\S+\s+)?)*commit\b/i,
-  push: /\bgit\s+(-[^\s]+\s+(\S+\s+)?)*push\b/i,
+  commit: /\bgit\s+(?:-[^\s]+\s+(?!-)(?:\S+\s+)?)*commit\b/i,
+  push: /\bgit\s+(?:-[^\s]+\s+(?!-)(?:\S+\s+)?)*push\b/i,
   pr: /\bgh\s+pr\s+create\b|\bgh\s+api\b[^|;&]*\/pulls\b(?![^|;&]*\/merge)/i,
-  merge: /\bgh\s+pr\s+merge\b|\bgit\s+(-[^\s]+\s+(\S+\s+)?)*merge\s+(?!-base\b)/i,
+  merge: /\bgh\s+pr\s+merge\b|\bgit\s+(?:-[^\s]+\s+(?!-)(?:\S+\s+)?)*merge\s+(?!-base\b)/i,
   tests: /$^/, // decided by ShellRun.isTest or TEST_RUN_RE
   typecheck: /\btsc\b(?!\S)|\b(bun|npm|pnpm|yarn)\s+(run\s+)?type-?check\b/i,
   build:
     /\bgradlew\b[^|;&]*assemble|\bassemble(Release|Debug)\b|\beas\s+build\b|\bexpo\s+(build|export|run:android)\b|\b(bun|npm|pnpm|yarn)\s+(run\s+)?build\b/i,
   deploy:
-    /\bvercel\s+(deploy|--prod|-p\b)|\bvercel\b\s*$|\b(bun|npm|pnpm|yarn)\s+(run\s+)?deploy\b|\bterraform\s+apply\b|\baws\s+(ecs\s+update-service|deploy\s|ssm\s+send-command|autoscaling\s+start-instance-refresh)|\bkubectl\s+(apply|rollout)\b|\bfly\s+deploy\b|\brailway\s+up\b|\bgh\s+workflow\s+run\b|\bgit\s+(-[^\s]+\s+(\S+\s+)?)*push\b[^|;&]*\b(main|master|prod|production|release)\b|\bgh\s+pr\s+merge\b[^|;&]*\b(main|master)\b/i, // CI/CD repos deploy on push or merge to main
+    /\bvercel\s+(deploy|--prod|-p\b)|\bvercel\b\s*$|\b(bun|npm|pnpm|yarn)\s+(run\s+)?deploy\b|\bterraform\s+apply\b|\baws\s+(ecs\s+update-service|deploy\s|ssm\s+send-command|autoscaling\s+start-instance-refresh)|\bkubectl\s+(apply|rollout)\b|\bfly\s+deploy\b|\brailway\s+up\b|\bgh\s+workflow\s+run\b|\bgit\s+(?:-[^\s]+\s+(?!-)(?:\S+\s+)?)*push\b[^|;&]*\b(main|master|prod|production|release)\b|\bgh\s+pr\s+merge\b[^|;&]*\b(main|master)\b/i, // CI/CD repos deploy on push or merge to main
 };
 
 /** Requests that need code to change, by their verb. */

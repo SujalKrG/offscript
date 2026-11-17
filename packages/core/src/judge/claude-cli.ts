@@ -40,7 +40,8 @@ function candidates(): Candidate[] {
 }
 
 function quoteForCmd(a: string): string {
-  return `"${a.replace(/"/g, '\\"')}"`;
+  // Standard Windows argument rule: backslashes are literal unless they sit before a quote or the closing quote, where they double.
+  return `"${a.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, "$1$1")}"`;
 }
 
 /** The program to spawn. Through cmd.exe it must be quoted too, or a path with a space ("C:\\Users\\Jo Smith\\...\\claude.cmd") splits. */
