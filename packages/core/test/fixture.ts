@@ -75,7 +75,7 @@ export function buildFixture(opts: { subagent?: boolean; backups?: boolean } = {
   const meta = (text: string) => recs.push({ ...common(), type: "user", isMeta: true, message: { role: "user", content: text } });
   const say = (text: string) => recs.push({ ...common(), type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
   const tool = (id: string, name: string, input: unknown, result: unknown, isError = false) => {
-    recs.push({ ...common(), type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+    recs.push({ ...common(), type: "assistant", message: { role: "assistant", model: "claude-opus-4-1", content: [{ type: "tool_use", id, name, input }] } });
     recs.push({
       ...common(),
       type: "user",
@@ -215,7 +215,11 @@ export function buildFixture(opts: { subagent?: boolean; backups?: boolean } = {
         type: "assistant",
         uuid: uuid(),
         timestamp: at,
-        message: { role: "assistant", content: [{ type: "tool_use", id: "s1", name: "Edit", input: { file_path: join(repo, "src", "coupon.ts") } }] },
+        message: {
+          role: "assistant",
+          model: "claude-haiku-4-5",
+          content: [{ type: "tool_use", id: "s1", name: "Edit", input: { file_path: join(repo, "src", "coupon.ts") } }],
+        },
       },
       {
         sessionId,

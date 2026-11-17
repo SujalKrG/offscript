@@ -87,6 +87,8 @@ packages/core/src/
   git.ts                  session change: commits, uncommitted edits, diff parser
   facts.ts                deterministic facts
   provenance.ts           added line -> agent edit -> turn -> prompt
+  trace.ts                Agent Trace records, one per commit
+  trace-validate.ts, trace-schema.json   vendored schema and a small validator for it
   scope.ts                anchor, related, derived, scratch, drift; against-instruction
   verdicts.ts             verdict per request, from evidence
   claims.ts               claim check and silent gaps
@@ -101,7 +103,7 @@ packages/cli/src/
   main.ts                 commands, flags, exit codes
   hook.ts                 SessionEnd hook input, output and install
   render.ts, summary.ts, json.ts   terminal view, shared numbers, JSON
-packages/core/test/       fixtures and tests
+packages/core/test/       fixtures and tests (trace-world.ts builds repos and sessions for the export tests)
 research/                 design and research notes
 ```
 

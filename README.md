@@ -104,6 +104,9 @@ bun run offscript review a1b2c3d4 --repo /path/to/your-repo
 
 # print a one-line review and write a report after every Claude Code session
 bun run offscript hook install --user
+
+# export Agent Trace records (one per commit) rebuilt from the transcript
+bun run offscript export --repo /path/to/your-repo
 ```
 
 Use `--user` for the hook. The hook command holds the absolute path to this checkout, so a project-level `.claude/settings.json` would break for anyone who clones your repo somewhere else.
@@ -126,6 +129,8 @@ Reports are written to `<repo>/.offscript/reports/<date>-<id>.md`. They hold red
 | `--fail-on never\|problems\|any` | When to exit 1. Default `never` |
 
 `offscript list [--repo <path>] [--limit <n>] [--json]` shows id, date, prompts and edits per session.
+
+`offscript export [session-id-prefix] [--repo <path>] [--out <dir>]` writes Agent Trace records. See [Agent Trace export](#agent-trace-export).
 
 `offscript hook install [--project|--user]` merges a `SessionEnd` hook (timeout 60 s) into Claude Code settings and keeps your other keys. Running it again changes nothing.
 
@@ -185,6 +190,47 @@ Output goes to `spike-results/<repo>/`, which is gitignored.
 | `--list` | List sessions and exit |
 
 </details>
+
+## Agent Trace export
+
+`offscript export` writes your Claude Code session as [Agent Trace](https://agent-trace.dev/) records: for each commit the session made, which lines of which files an AI conversation wrote, and with which model. Other tools (blame views, dashboards, review tools) can read the records.
+
+**This is reconstructed from the transcript, not captured live.** offscript reads the finished session and matches each committed line to the edit that wrote it. Each record says so in its metadata (`derivation: "transcript"`).
+
+```bash
+# one JSON array on stdout (summary and warnings go to stderr)
+bun run offscript export --repo /path/to/your-repo > traces.json
+
+# one file per commit: <dir>/<sha>.json (application/vnd.agent-trace.record+json)
+bun run offscript export a1b2c3d4 --repo /path/to/your-repo --out traces
+```
+
+`export [session-id-prefix] [--repo <path>] [--out <dir>]` picks the session the same way `review` does and uses the same exit codes (0 ok, 2 usage, 3 no session, 4 failure). Nothing is written into `.git`; `--out` inside `.git` is refused. Every record is checked against a vendored copy of the published schema before it is printed. A record that fails is exit 4.
+
+What is and is not in a record:
+
+- A line is credited only when an edit, a Claude Code file backup or a recorded shell write explains it. A hunk is credited to an edit when that edit's added lines contain the hunk as a contiguous run of lines. A lone `}` or `return;` is never credited on its own.
+- Lines nothing explains (typed by you, or made by a tool offscript cannot see) are left out and counted as unresolved. They are never labelled `human`: no evidence of an AI is not evidence of a person.
+- Lines that are not committed yet have no revision to record against. They are skipped and counted on stderr.
+- Lines another Claude Code session wrote into the same files are credited to that session's own conversation. `metadata` lists which session each conversation is.
+- No prompt text, no conversation URL and no absolute paths are written.
+
+### Interpretation notes
+
+The spec leaves some points open and its prose disagrees with its published schema in others. These are the choices offscript made.
+
+| Point | Spec | What offscript writes |
+|---|---|---|
+| `version` | The prose shows `"0.1.0"`; the published schema requires `^[0-9]+\.[0-9]+$`, which rejects it | `"0.1"`, so records validate against the schema |
+| `tool` | `name` and `version` optional in the prose; both required in the schema | `{ "name": "claude-code", "version": <Claude Code version> }`, only when the transcript records the version |
+| `content_hash` | Algorithm and normalisation undefined | Omitted |
+| Contributor | `human`, `ai`, `mixed`, `unknown` | Always `ai`. `human` is never written. `model_id` is `anthropic/<model>` from the transcript, left out when unknown |
+| Extra data | The schema rejects unknown fields except in `metadata` | Everything of ours is in `metadata["io.github.sujalkrg.offscript"]`: generator and version, `derivation`, `session_id`, `unresolved_lines`, `skipped_uncommitted_lines`, and which session each conversation is |
+| Conversation `url` | A link to the conversation | Omitted: a local transcript has no URL, and a file path would leak folder names |
+| Revision | One record per revision | One record per commit in the session's change, keyed to the commit as it exists now. After a rebase or amend, export again: records for old commits are stale |
+| Storage | Not defined | JSON on stdout or files under `--out`. No git notes yet |
+
+The vendored schema is `packages/core/src/trace-schema.json`. A test records its SHA-256, so changing it is deliberate. Records are checked with a small validator in this repo that covers only the schema keywords it uses, so there is no new dependency.
 
 ## How it works
 
@@ -255,7 +301,7 @@ Today offscript reads Claude Code sessions only. Reading recorders' formats (Ent
   - [x] 2. Verdict per request from evidence
   - [x] 3. Claim check and silent gaps
   - [x] 4. `offscript` CLI: `review`, `list`, `hook install`, `--no-llm`, `--json`, hook, cache
-  - [ ] 5. Agent Trace export
+  - [x] 5. Agent Trace export (`offscript export`, rebuilt from the transcript, not captured live)
   - [ ] 6. Drift Bench (labelled benchmark with published numbers)
 - [ ] **Later:** Codex reader, standing-rule checks beyond "don't touch", fix-prompt, SARIF output
 - [ ] **Later:** GitHub Action, single binaries, Claude Code plugin marketplace

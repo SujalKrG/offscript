@@ -189,6 +189,7 @@ interface PendingTool {
   afterPrompt: number;
   seq: number;
   timestamp: string;
+  model?: string;
 }
 
 /**
@@ -290,6 +291,7 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
 
     if (type === "assistant" && rec.message && Array.isArray(rec.message.content)) {
       const current = prompts.length;
+      const model = typeof rec.message.model === "string" && rec.message.model && !rec.message.model.startsWith("<") ? rec.message.model : undefined;
       for (const b of rec.message.content) {
         if (!b || typeof b !== "object") continue;
         if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
@@ -301,6 +303,7 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
             afterPrompt: current,
             seq: ++seq,
             timestamp: rec.timestamp ?? "",
+            model,
           });
         }
       }
@@ -420,6 +423,7 @@ export function parseSession(path: string, opts: { subagent?: boolean } = {}): S
       kind,
       failed: isError,
       timestamp: call.timestamp,
+      ...(call.model ? { model: call.model } : {}),
     });
   }
 

@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!**/spike-results", "!**/research", "!**/assets", "!**/*.md"]
+    "includes": ["**", "!**/node_modules", "!**/spike-results", "!**/research", "!**/assets", "!**/*.md", "!**/trace-schema.json"]
   },
   "formatter": {
     "enabled": true,

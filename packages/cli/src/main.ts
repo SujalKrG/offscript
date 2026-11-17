@@ -2,17 +2,20 @@
 // offscript: did your coding agent do what you asked, only what you asked, and did it tell you the truth?
 //
 //   offscript review [session-id-prefix] [--repo <path>] [--no-llm] [--full] [--json] [--md <file>] [--hook] [--fail-on never|problems|any]
+//   offscript export [session-id-prefix] [--repo <path>] [--out <dir>]
 //   offscript list [--repo <path>] [--limit <n>] [--json]
 //   offscript hook install [--project|--user] [--repo <path>]
 //
 // Exit codes: 0 reviewed (default, or --fail-on never), 1 problems found (only with --fail-on problems|any), 2 usage error, 3 no session found, 4 unexpected failure.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import type { Session } from "../../core/src/types.ts";
+import pkg from "../package.json" with { type: "json" };
 import { HOOK_MODEL_TIMEOUT_MS, HOOK_STDIN_TIMEOUT_MS, hookCommand, hookMessage, hookOutput, installHook, parseHookInput, settingsPath } from "./hook.ts";
-import { toJson } from "./json.ts";
+import { SCHEMA_VERSION, toJson } from "./json.ts";
 import { detectTerm, renderTerminal } from "./render.ts";
 import { summarize } from "./summary.ts";
 
@@ -59,6 +62,10 @@ Usage
     --fail-on <lvl>   exit 1 when: never (default) | problems | any (for CI)
   offscript list                         sessions for this repo: id, date, prompts, edits
     --repo <path>  --limit <n>  --json
+  offscript export [session-id-prefix]   Agent Trace records (one per commit), rebuilt from the transcript, not captured live
+    --repo <path>     repo to export (default: current directory)
+    --out <dir>       write <dir>/<sha>.json, one record per file (application/vnd.agent-trace.record+json); never into .git
+                      default: print the records as a JSON array on stdout (summary and warnings go to stderr)
   offscript hook install [--project|--user]   add a SessionEnd hook to Claude Code settings (merge, never overwrite)
 
 Exit codes: 0 ok, 1 problems found (with --fail-on), 2 usage error, 3 no session found, 4 unexpected failure.
@@ -74,6 +81,7 @@ const OPTIONS = {
   md: { type: "string" },
   hook: { type: "boolean" },
   "fail-on": { type: "string" },
+  out: { type: "string" },
   limit: { type: "string" },
   project: { type: "boolean" },
   user: { type: "boolean" },
@@ -97,6 +105,7 @@ export async function run(argv: string[], io: Io = realIo()): Promise<number> {
   const [cmd, sub, ...extra] = positionals;
   try {
     if (cmd === "review" && extra.length === 0) return await review(values, sub, io);
+    if (cmd === "export" && extra.length === 0) return await exportTrace(values, sub, io);
     if (cmd === "list" && sub === undefined) return await list(values, io);
     if (cmd === "hook" && sub === "install" && extra.length === 0) return await hookInstall(values, io);
     throw new UsageError(cmd ? `unknown command: ${positionals.join(" ")}` : "missing command");
@@ -286,7 +295,7 @@ async function list(values: Values, io: Io): Promise<number> {
     return EXIT.noSession;
   }
   if (values.json) {
-    io.out(`${JSON.stringify({ schemaVersion: 1, repo: ctx.root, sessions: rows }, null, 2)}\n`);
+    io.out(`${JSON.stringify({ schemaVersion: SCHEMA_VERSION, repo: ctx.root, sessions: rows }, null, 2)}\n`);
     return EXIT.ok;
   }
   io.out(`${"ID".padEnd(10)}${"DATE (UTC)".padEnd(18)}${"PROMPTS".padStart(7)}${"EDITS".padStart(7)}\n`);
@@ -295,6 +304,108 @@ async function list(values: Values, io: Io): Promise<number> {
       `${r.id.slice(0, 8).padEnd(10)}${r.startedAt.slice(0, 16).replace("T", " ").padEnd(18)}${String(r.prompts).padStart(7)}${String(r.edits).padStart(7)}\n`,
     );
   io.out("\nReview one with: offscript review <id>\n");
+  return EXIT.ok;
+}
+
+/** The folder a path really points to: symlinks followed as far as the path exists, the rest kept as written. */
+function realish(p: string): string {
+  let head = p;
+  const tail: string[] = [];
+  while (!existsSync(head) && dirname(head) !== head) {
+    tail.unshift(head.slice(dirname(head).length).replace(/^[\\/]+/, ""));
+    head = dirname(head);
+  }
+  try {
+    return join(realpathSync.native(head), ...tail);
+  } catch {
+    return p;
+  }
+}
+
+/** True when writing into `out` would land in a .git directory: by name (also with trailing dots or spaces, or the 8.3 name), or by real location (symlinks, worktree git dirs). */
+function inGitDir(out: string, root: string, git: (repo: string, args: string[]) => { ok: boolean; out: string }): boolean {
+  const real = realish(out);
+  const parts = (p: string) => p.replace(/\\/g, "/").split("/");
+  if ([...parts(out), ...parts(real)].some((p) => /^(\.git|git~\d+)[. ]*$/i.test(p))) return true;
+  const dirs = git(root, ["rev-parse", "--absolute-git-dir", "--git-common-dir"]);
+  if (!dirs.ok) return false;
+  return dirs.out
+    .split("\n")
+    .map((d) => d.trim())
+    .filter(Boolean)
+    .some((d) => {
+      const rel = relative(realish(resolve(root, d)).toLowerCase(), real.toLowerCase());
+      return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    });
+}
+
+async function exportTrace(values: Values, prefix: string | undefined, io: Io): Promise<number> {
+  const { openRepo } = await import("../../core/src/review.ts");
+  const { git, sessionChange } = await import("../../core/src/git.ts");
+  const { buildTraceRecords } = await import("../../core/src/trace.ts");
+  const { validateTraceRecord } = await import("../../core/src/trace-validate.ts");
+
+  const repoArg = resolve(io.cwd, values.repo ?? ".");
+  const outDir = values.out === undefined ? null : resolve(io.cwd, values.out);
+  const ctx = openRepo(repoArg);
+  if (!ctx) {
+    io.err(`offscript: not a git repository: ${repoArg}\n`);
+    return EXIT.usage;
+  }
+  if (outDir !== null && inGitDir(outDir, ctx.root, git)) throw new UsageError(`--out must not be inside a .git directory (got ${outDir})`);
+  let session: Session | null = null;
+  if (prefix !== undefined) {
+    const hits = ctx.refs.filter((r) => r.id.startsWith(prefix));
+    if (hits.length > 1)
+      throw new UsageError(`"${prefix}" matches ${hits.length} sessions: ${hits.map((h) => h.id.slice(0, 12)).join(", ")}. Use more characters.`);
+    session = hits[0] ? ctx.getSession(hits[0].path) : null;
+  } else {
+    for (const ref of ctx.refs) {
+      const s = ctx.getSession(ref.path);
+      if (s && s.prompts.length > 0 && s.edits.length > 0) {
+        session = s;
+        break;
+      }
+    }
+  }
+  if (!session) {
+    const msg = prefix !== undefined ? `no session starting with "${prefix}" in ${ctx.root}` : `no Claude Code session with edits found for ${ctx.root}`;
+    io.err(`offscript: ${msg}. Looked in ~/.claude/projects (set CLAUDE_CONFIG_DIR if yours is elsewhere).\n`);
+    return EXIT.noSession;
+  }
+
+  const change = sessionChange(ctx.root, session);
+  const { records, summary } = change
+    ? buildTraceRecords({ repoRoot: ctx.root, session, change, others: ctx.othersFor(session), generatorVersion: pkg.version })
+    : { records: [], summary: { commits: 0, files: 0, ranges: 0, creditedLines: 0, unresolvedLines: 0, skippedUncommittedLines: 0 } };
+  for (const r of records) {
+    const errors = validateTraceRecord(r);
+    if (errors.length > 0) {
+      io.err(`offscript: export failed: the record for ${r.vcs.revision.slice(0, 12)} breaks the Agent Trace schema (${errors[0]})\n`);
+      return EXIT.failed;
+    }
+  }
+
+  if (outDir === null) io.out(`${JSON.stringify(records, null, 2)}\n`);
+  else {
+    mkdirSync(outDir, { recursive: true });
+    for (const r of records) {
+      const file = join(outDir, `${r.vcs.revision}.json`);
+      const tmp = `${file}.tmp-${process.pid}`;
+      try {
+        writeFileSync(tmp, `${JSON.stringify(r, null, 2)}\n`, "utf8");
+        renameSync(tmp, file);
+      } catch (e) {
+        rmSync(tmp, { force: true });
+        throw e;
+      }
+    }
+  }
+  const skipped =
+    summary.skippedUncommittedLines > 0 ? `; ${summary.skippedUncommittedLines} uncommitted line(s) skipped (no commit to record them against)` : "";
+  io.err(
+    `offscript: ${summary.commits} record(s) for session ${session.id.slice(0, 8)}: ${summary.files} file(s), ${summary.ranges} range(s), ${summary.creditedLines} line(s) credited, ${summary.unresolvedLines} unresolved (no edit explains them)${skipped}${outDir !== null ? `; wrote ${records.length} file(s) to ${shown(outDir, io.cwd)}` : ""}\n`,
+  );
   return EXIT.ok;
 }
 
