@@ -130,6 +130,20 @@ describe("heuristic ledger", () => {
     expect(heuristicLedger(fake(["x".repeat(400)])).intents[0]!.text.length).toBe(160);
   });
 
+  test("the offline ledger reads the newer constraint wordings too, not only the ones that start with a negation", () => {
+    for (const t of ["src/auth.ts is off limits", "Hands off src/auth.ts.", "src/db/schema.ts is read-only", "src/auth.ts is frozen until the audit is done"]) {
+      expect([t, heuristicLedger(fake([t])).intents[0]?.kind]).toEqual([t, "constraint"]);
+    }
+    // near misses stay tasks: a request to build something read-only, and a task whose later sentence is a constraint
+    for (const t of [
+      "Make the endpoint read-only",
+      "Freeze the dependency versions in package.json",
+      "Add a retry limit to src/tariff.ts. src/auth.ts is off limits.",
+    ]) {
+      expect([t, heuristicLedger(fake([t])).intents[0]?.kind]).toEqual([t, "task"]);
+    }
+  });
+
   test("harness and meta prompts are not requests", () => {
     const l = heuristicLedger(
       fake([

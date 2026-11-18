@@ -146,6 +146,35 @@ describe("make is a test runner", () => {
       expect(TEST_COMMAND_RE.test(c)).toBe(false);
     expect(kinds("All tests pass.", [{ cmd: "make test" }])).toEqual(["tests:verified"]);
   });
+
+  test("a make dry run, query or help run executes no recipe, so it is not test evidence", () => {
+    for (const c of [
+      "make -n test",
+      "make --dry-run test",
+      "make --just-print tests",
+      "make --recon check",
+      "make -q check",
+      "make --question test",
+      "make -nj4 test",
+      "make -j4 -n test",
+      "make test -n",
+      "make test --dry-run",
+      "cd api && make -n test",
+    ])
+      expect([c, TEST_COMMAND_RE.test(c)]).toEqual([c, false]);
+    for (const c of [
+      "make test",
+      "make -j4 test",
+      "make --no-print-directory test",
+      "make test -j4",
+      "make test FOO=bar",
+      "make test && ls -n",
+      "make -k check",
+    ])
+      expect([c, TEST_COMMAND_RE.test(c)]).toEqual([c, true]);
+    // the evidence rule end to end: a dry run cannot verify "all tests pass"
+    expect(kinds("All tests pass.", [{ cmd: "make -n test" }])).toEqual(["tests:unsupported"]);
+  });
 });
 
 describe("what a constraint protects", () => {

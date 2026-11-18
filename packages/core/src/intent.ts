@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { cacheKey, getCached, putCached } from "./cache.ts";
 import { judgeModel, runClaudeJson } from "./judge/claude-cli.ts";
 import { redact } from "./redact.ts";
+import { isFileConstraint } from "./scope.ts";
 import type { Claim, Intent, IntentLedger, Session } from "./types.ts";
 
 const MAX_PROMPT_CHARS = 2500;
@@ -191,7 +192,7 @@ export function heuristicLedger(session: Session): IntentLedger {
     intents.push({
       id: `I${intents.length + 1}`,
       text: first.length > 160 ? `${first.slice(0, 157)}...` : first,
-      kind: CONSTRAINT_RE.test(flat) ? "constraint" : "task",
+      kind: CONSTRAINT_RE.test(flat) || isFileConstraint(first) ? "constraint" : "task", // the first sentence only: one kind per prompt
       sourcePrompts: [p.index],
       quote: flat.slice(0, 120),
       status: "active",
