@@ -103,6 +103,8 @@ packages/cli/src/
   main.ts                 commands, flags, exit codes
   hook.ts                 SessionEnd hook input, output and install
   render.ts, summary.ts, json.ts   terminal view, shared numbers, JSON
+packages/bench/src/        Drift Bench: metrics, mutation catalogue, case generator, scorer, runner (bun run bench)
+packages/bench/test/       bench tests (smoke run of the real pipeline, scorer failure checks)
 packages/core/test/       fixtures and tests (trace-world.ts builds repos and sessions for the export tests)
 research/                 design and research notes
 ```

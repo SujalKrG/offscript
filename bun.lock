@@ -11,6 +11,10 @@
         "typescript": "7.0.2",
       },
     },
+    "packages/bench": {
+      "name": "@offscript/bench",
+      "version": "0.0.1",
+    },
     "packages/cli": {
       "name": "offscript",
       "version": "0.0.1",
@@ -41,6 +45,8 @@
     "@biomejs/cli-win32-arm64": ["@biomejs/cli-win32-arm64@2.5.15", "", { "os": "win32", "cpu": "arm64" }, "sha512-2kPKzhNlm8C+Ru3GcO0Me2ODkCBLrVOUNuyi84RJyWDVKAA4+Kjj3jMjL938lF6BRfvltC4vB2nPY9SvN51Ovg=="],
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.15", "", { "os": "win32", "cpu": "x64" }, "sha512-yAzh4UqEImV6Hcy0zjUqNfJAsUhoD64FBQCdTG8Md/Z2wQeVP/ZmJ3XRYAs1g8J9fjTFyl2fCtc5FB5til47+g=="],
+
+    "@offscript/bench": ["@offscript/bench@workspace:packages/bench"],
 
     "@offscript/core": ["@offscript/core@workspace:packages/core"],
 

@@ -39,7 +39,7 @@ const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
 
 export const TEST_COMMAND_RE =
-  /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|bun\s+test\b|npx\s+(?:vitest|jest|playwright\s+test|mocha)\b|vitest\b|jest\b|mocha\b|playwright\s+test\b|pytest\b|python\s+-m\s+(?:pytest|unittest)\b|go\s+test\b|cargo\s+test\b|phpunit\b|php\s+artisan\s+test\b|pest\b|rspec\b|dotnet\s+test\b|mvn\s+(?:-\S+\s+)*test\b|gradle(?:w)?\s+test\b|deno\s+test\b)/i;
+  /\b(?:(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?test\b|bun\s+test\b|npx\s+(?:vitest|jest|playwright\s+test|mocha)\b|vitest\b|jest\b|mocha\b|playwright\s+test\b|pytest\b|python\s+-m\s+(?:pytest|unittest)\b|go\s+test\b|cargo\s+test\b|phpunit\b|php\s+artisan\s+test\b|pest\b|rspec\b|dotnet\s+test\b|mvn\s+(?:-\S+\s+)*test\b|gradle(?:w)?\s+test\b|deno\s+test\b|(?<![\w/.-])make\s+(?:-\S+\s+)*(?:test|tests|check)\b)/i;
 
 export function claudeProjectsDir(): string {
   const base = process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");

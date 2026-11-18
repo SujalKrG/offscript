@@ -65,9 +65,39 @@ const GENERIC = new Set(
 const TOUCH_VERB =
   "touch(?:ing)?|chang(?:e|ing)|modif(?:y|ying)|edit(?:ing)?|rewrit(?:e|ing)|refactor(?:ing)?|delete|deleting|remov(?:e|ing)|renam(?:e|ing)|mov(?:e|ing)|alter(?:ing)?|overwrit(?:e|ing)|replac(?:e|ing)";
 
-/** A real prohibition ("don't touch auth", "leave payments alone", "keep the schema as is"), not any sentence with "not" in it. */
-const NEGATION_RE = new RegExp(
-  `\\b(?:(?:don'?t|dont|do not|never|shouldn'?t|should not|must not|mustn'?t|avoid|without)\\b[^.!?\\n]{0,40}?\\b(?:${TOUCH_VERB})|leave\\b[^.!?\\n]{0,40}?\\balone|keep\\b[^.!?\\n]{0,40}?\\b(?:as is|untouched|intact|unchanged))\\b`,
+/** A gap inside a sentence: any text, and a dot only inside a name ("src/auth/token.ts"), never a sentence end. */
+const gap = (max: number) => `(?:[^.!?\\n]|\\.(?=\\w)){0,${max}}?`;
+
+/** A prohibition whose target FOLLOWS it: "don't touch X", "without changing X", "hands off X". */
+const AFTER_RE = new RegExp(
+  `\\b(?:(?:don'?t|dont|do not|never|shouldn'?t|should not|must not|mustn'?t|avoid|without)\\b${gap(40)}\\b(?:${TOUCH_VERB})|hands[- ]off)\\b`,
+  "i",
+);
+/** A prohibition whose target sits INSIDE it: "leave X alone", "keep X as is". */
+const BETWEEN_RE = new RegExp(`\\bleave\\b(${gap(80)})\\balone\\b|\\bkeep\\b(${gap(80)})\\b(?:as is|untouched|intact|unchanged)\\b`, "i");
+/** A prohibition whose target PRECEDES it: "X is off limits", "X stays read-only". */
+const POST_RE = /\b(?:is|are|stay|stays|remain|remains|be)\s+(?:off[- ]limits|read[- ]only|frozen|untouchable)\b/i;
+
+/** A real prohibition ("don't touch auth", "leave payments alone", "keep the schema as is", "auth is off limits"), not any sentence with "not" in it. */
+const NEGATION_RE = new RegExp([AFTER_RE.source, BETWEEN_RE.source, POST_RE.source].join("|"), "i");
+
+/**
+ * The words a prohibition protects, and the rest of its sentence. "Add a flag to cart.ts without changing auth.ts" protects
+ * auth.ts only; the words before the prohibition are part of the request.
+ */
+function constraintTarget(sentence: string): { target: string; rest: string } | null {
+  const a = AFTER_RE.exec(sentence);
+  if (a) return { target: sentence.slice(a.index + a[0].length).split(/;|\b(?:but|then)\b/i)[0]!, rest: sentence.slice(0, a.index) };
+  const b = BETWEEN_RE.exec(sentence);
+  if (b) return { target: b[1] ?? b[2] ?? "", rest: `${sentence.slice(0, b.index)} ${sentence.slice(b.index + b[0].length)}` };
+  const c = POST_RE.exec(sentence);
+  if (c) return { target: sentence.slice(0, c.index), rest: sentence.slice(c.index + c[0].length) };
+  return null;
+}
+
+/** A later instruction that lets the agent touch what it was told to leave alone: "you can edit X now", "go ahead and change X". */
+const LIFT_RE = new RegExp(
+  `\\b(?:you can|you may|feel free to|go ahead and|it'?s (?:ok|okay|fine) to|okay to|allowed to)\\b${gap(30)}\\b(?:${TOUCH_VERB})\\b`,
   "i",
 );
 
@@ -176,14 +206,26 @@ export function classifyScope(input: ScopeInput): Map<string, FileScope> {
   const out = new Map<string, FileScope>();
 
   // Sentences that tell the agent NOT to touch something, and sentences that ask for something.
-  const negative: { prompt: number; text: string; words: Set<string> }[] = [];
+  const negative: { prompt: number; text: string; words: Set<string>; liftedAt: number | null }[] = [];
   const positive: { prompt: number; words: Set<string> }[] = [];
   const sources = [...input.prompts, ...(input.extraText ?? []).map((t) => ({ index: 0, text: t }))];
   for (const p of sources) {
     for (const sentence of p.text.split(/(?<=[.!?\n])\s+|\s+(?:but|and|also)\s+(?=(?:don'?t|do not|never|leave|avoid)\b)/i)) {
-      if (NEGATION_RE.test(sentence)) negative.push({ prompt: p.index, text: sentence.trim().slice(0, 120), words: textWords(sentence) });
-      else positive.push({ prompt: p.index, words: textWords(sentence) });
+      const c = constraintTarget(sentence);
+      if (c) {
+        negative.push({ prompt: p.index, text: sentence.trim().slice(0, 120), words: textWords(c.target), liftedAt: null });
+        positive.push({ prompt: p.index, words: textWords(c.rest) });
+      } else positive.push({ prompt: p.index, words: textWords(sentence) });
     }
+  }
+
+  // A later prompt that lets the agent touch it ends the constraint from that prompt on.
+  for (const n of negative) {
+    if (!n.prompt) continue;
+    const lift = input.prompts.find(
+      (p) => p.index > n.prompt && p.text.split(/(?<=[.!?\n])\s+/).some((x) => LIFT_RE.test(x) && [...textWords(x)].some((w) => n.words.has(w))),
+    );
+    n.liftedAt = lift?.index ?? null;
   }
 
   // 1. anchors
@@ -256,7 +298,9 @@ export function classifyScope(input: ScopeInput): Map<string, FileScope> {
 
   for (const f of files) {
     const words = pathWords(f.path);
-    const neg = negative.find((n) => words.some((w) => n.words.has(w)));
+    // An edit counts against a constraint only in turns before the user lifted it.
+    const live = (n: (typeof negative)[number]) => !f.turns.length || f.turns.some((t) => n.liftedAt === null || t < n.liftedAt);
+    const neg = negative.find((n) => words.some((w) => n.words.has(w)) && live(n));
     // Another request that anchors this file (a task in the ledger, a positive sentence) means the edit was asked for.
     const askedElsewhere = anchorReason.has(f.path) && !f.inPrompts;
     const againstInstruction = neg && f.touchedByAgent && !askedElsewhere ? { prompt: neg.prompt, text: neg.text } : null;

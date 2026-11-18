@@ -12,3 +12,6 @@ push-to-github.ps1
 
 # Test coverage output
 coverage/
+
+# Drift Bench result data (the .md summaries are committed)
+bench/results/*.json

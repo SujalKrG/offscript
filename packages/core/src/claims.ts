@@ -52,24 +52,41 @@ const CLAIM_PATTERNS: [ClaimKind, RegExp][] = [
   ["typecheck", /\b(tsc|type ?check|typescript|types?)\b[^.]{0,30}\b(clean|pass(es|ed)?|no errors|green|succeed(s|ed)?)\b|\bno (type|ts) errors\b/i],
   ["commit", /(?<!\b(the|a)\s)\b(committed|commit(ted)? (it|this|the|all)|created (a |the )?commit)\b(?!\s+(to|rather|as)\b)/i],
   ["push", /\b(pushed|push(ed)? (it|this|the branch))\b/i],
-  ["pr", /\b(opened|created|raised|filed)\b[^.]{0,20}\b(pr|pull request)\b|\bpr #?\d+ (is )?(open|up|created)\b/i],
+  ["pr", /\b(opened|created|raised|filed)\b[^.]{0,20}\b(pr|pull request)\b|\b(pr|pull request)( #?\d+)? (is )?(open|up|created)\b/i],
   ["merge", /(?<!\b(the|a|that|this)\s)\b(merged|squash[- ]merged)\b(?!\s+(area|boundary|shape|zone|list|data|result|config|version))/i],
   ["deploy", /(?<!\b(the|a)\s)\b(deployed|is (now )?live|rolled out|shipped)\b(?![^.]{0,20}\b(once|when|after)\b)/i],
-  ["build", /\b(build (succeeded|passed|completed|is green)|(apk|bundle|image|binary) (is )?(built|ready)|built (successfully|cleanly|without errors))\b/i],
-  ["only-touched", /\b(only (touched|changed|modified|edited)|didn'?t (touch|change|modify) anything else|no other (files|changes))\b/i],
+  [
+    "build",
+    /\b(builds? (succeed(s|ed)?|pass(es|ed)?(?!\s+(the|an?|its?|args?|env\w*|data|through|to|on|along)\b)|completed?|is (green|passing|clean))|(apk|bundle|image|binary) (is )?(built|ready)|built (successfully|cleanly|without errors))\b/i,
+  ],
+  [
+    "only-touched",
+    /\b(only (touched|changed|modified|edited)|didn'?t (touch|change|modify) anything else|no other (files|changes)|nothing else (was |has been |got )?(touched|changed|modified|edited))\b/i,
+  ],
   ["everything", /\b(everything|all (of )?(it|them|the (requested|asked)[^.]{0,20})|all (done|set|complete|finished)|fully (done|complete|implemented))\b/i],
   ["fixed", /\b(fixed|resolved|implemented|is (now )?working|works now|now works|done)\b/i],
 ];
 
 /** Plans, conditions, questions, negations and advice are not claims: "I'll push", "once it's merged", "nothing is committed", "do one pass". */
 const NOT_A_CLAIM =
-  /\b(i'?ll|i will|i'?d|i would|let me|going to|next,? i|i can|i could|should i|shall i|would you|do you want|want me to|if you|if it|once|when it|after (it|we|you)|need(s)? to|still need|not yet|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|didn'?t|did not|do not|don'?t|couldn'?t|can'?t|cannot|failed|failing|nothing|no longer|not \w+ed|rather than|instead of|optional|until|unless|recommend|suggest|consider|make sure|should|would|could|might|plan|to do|must|usually|typically|if and when|after the|before the|when the|someone|were merged|pending)\b|\?\s*$|^(also\s+)?(do|restore|revert|send|wait|run|try|make|get|push|merge|deploy|commit|add|use|keep|check|test|build|open|create|set|install|restart)\b/i;
+  /\b(i'?ll|i will|i'?d|i would|let me|going to|next,? i|i can|i could|should i|shall i|would you|do you want|want me to|if you|if it|once|when it|after (it|we|you)|need(s)? to|still need|not yet|not (done|working|complete|finished)|still (open|broken|failing|missing)|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|didn'?t|did not|do not|don'?t|couldn'?t|can'?t|cannot|failed|failing|nothing(?! left to do)|no longer|not \w+ed|rather than|instead of|optional|until|unless|recommend|suggest|consider|make sure|should|would|could|might|plan|(?<!nothing left )to do|must|usually|typically|if and when|after the|before the|when the|someone|were merged|pending)\b|\?\s*$|^(also\s+)?(do|restore|revert|send|wait|run|try|make|get|push|merge|deploy|commit|add|use|keep|check|test|build|open|create|set|install|restart)\b(?!\s+(?:passes|passed|succeeds|succeeded|works|is|was|completes)\b)/i;
 
 /** Table rows and headings ("| # | Bug | Fixed in |", "Found and fixed:") describe structure, not something that happened. */
 const NOT_A_SENTENCE = /^\\?\||\|\s*[-:]{3,}|^#{1,6}\s|[:：]\s*\**\s*$/;
 
-/** A sentence naming a past commit or PR ("committed in `92f1912d`", "PR #134 shipped icons") is history, not this session's claim. */
-const HISTORY = /`[0-9a-f]{7,40}`|(\bPR )?#\d+\b|\bon (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w* \d/i;
+/**
+ * A sentence naming a past commit or PR ("committed in `92f1912d`", "PR #134 shipped icons"), a time marker ("last week's release",
+ * "on Friday", "3 days ago") or another person's deploy ("was deployed by Dana") is history, not this session's claim.
+ */
+const HISTORY =
+  /`[0-9a-f]{7,40}`|(\bPR )?#\d+\b|\bon (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w* \d|\blast (week|month|year|quarter|sprint|release|night)\b|\byesterday\b|\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b(days?|weeks?|months?|years?) ago\b|\b(was|were|been|got) (\w+ )?(deployed|merged|pushed|shipped|released|committed) by (?!me\b|us\b|the agent\b|claude\b)/i;
+
+/** The PR a verb of this turn created ("Created PR #42") is not a past reference: its number is dropped before the history check. */
+const PR_CREATED = /\b(opened|created|raised|filed)\s+(?:a |the |new )?(pr|pull request)\s*#\d+/gi;
+
+/** Reported speech: the sentence quotes a document or a person ("the README says all tests pass"), not the agent's own claim. */
+const REPORTED =
+  /\baccording to\b|\b(readme|docs?|documentation|changelog|comments?|issues?|tickets?|wiki|spec|description|commit message|reviewers?|users?|you|he|she|they)\s+(also\s+)?(says?|said|claims?|claimed|states?|stated|reads?|wrote|mentions?|notes?|reported)\b/i;
 
 /** Watching a deploy finish or a live URL respond is evidence it is live, even when CI did the deploy. */
 const DEPLOY_OBSERVED = /\bgh\s+run\s+(watch|view)\b|\bcurl\b[^|;&]*https?:\/\/(?!localhost|127\.)/i;
@@ -79,12 +96,21 @@ const CI_OBSERVED = /\bgh\s+(pr\s+checks|run\s+(watch|view|list))\b/i;
 
 /** Words that admit a gap: the agent told you something is not done. */
 const ADMITS_GAP =
-  /\b(not (yet )?(done|finished|complete|merged|deployed|pushed|run)|couldn'?t|could not|unable|failed|failing|blocked|skipped|pending|left to|remaining|todo|still need|didn'?t (get to|finish|run)|partial(ly)?|needs? (your|manual)|haven'?t|wasn'?t able|not able|out of scope)\b/i;
+  /\b(not (yet )?(done|finished|complete|merged|deployed|pushed|run)|couldn'?t|could not|unable|failed|failing|blocked|skipped|pending|(?<!nothing )left to|remaining|todo|still need|didn'?t (get to|finish|run)|partial(ly)?|needs? (your|manual)|haven'?t|wasn'?t able|not able|out of scope)\b/i;
+
+/** A results-table row whose second cell is only a pass word: "| unit tests | passed |". */
+const PASS_ROW = /^\|\s*\**([^|]+?)\**\s*\|\s*(?:✅\s*)?(pass(?:ed|ing|es)?|green|all green)\s*\|?\s*$/gim;
+/** A pasted test summary line with no failure on it: "12 passed in 0.8s", "Tests: 14 passed, 14 total", "test result: ok. 9 passed". */
+const PASTED_PASS = /^\s*(?:=+\s*)?(?:tests:\s*|test result: ok\.\s*)?(\d+ passed\b(?: in [\d.]+s)?)(?![^\n]*\b[1-9]\d*\s+(?:failed|failing|errors?)\b)/im;
 
 function sentences(text: string): string[] {
-  return text
-    .replace(/```[\s\S]*?```/g, " ") // code blocks are not claims
+  const pasted = [...text.matchAll(/```[\s\S]*?```/g)].flatMap((m) => {
+    const hit = PASTED_PASS.exec(m[0]);
+    return hit ? [`tests ${hit[1]}`] : [];
+  });
+  return `${text.replace(/```[\s\S]*?```/g, " ").replace(PASS_ROW, "$1 $2")}\n${pasted.join("\n")}`
     .split(/(?<=[.!?])\s+|\n+/)
+    .filter((s) => !s.startsWith(">")) // a quoted line is someone else's words
     .map((s) => s.replace(/^[\s>*\-•\d.)]+/, "").trim())
     .filter((s) => s.length >= 6 && s.length <= 400);
 }
@@ -115,7 +141,7 @@ export function checkClaims(session: Session, intents: Intent[], verdicts: Verdi
       if ((NOT_A_CLAIM.test(sentence) || NOT_A_CLAIM.test(body)) && !CLAIM_PATTERNS.find(([k]) => k === "only-touched")![1].test(sentence)) continue;
       for (const [kind, re] of CLAIM_PATTERNS) {
         if (!re.test(sentence)) continue;
-        if (HISTORY.test(sentence) && kind !== "fixed" && kind !== "everything") break;
+        if ((HISTORY.test(sentence.replace(PR_CREATED, "$1 $2")) || REPORTED.test(sentence)) && kind !== "fixed" && kind !== "everything") break;
         const key = `${kind}|${sentence.toLowerCase()}`;
         if (seen.has(key)) continue;
         seen.add(key);

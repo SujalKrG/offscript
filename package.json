@@ -11,6 +11,7 @@
   "scripts": {
     "offscript": "bun packages/cli/src/main.ts",
     "spike": "bun packages/core/src/spike.ts",
+    "bench": "bun packages/bench/src/run.ts",
     "spike:score": "bun packages/core/src/score-labels.ts",
     "test": "bun test",
     "test:coverage": "bun test --coverage --coverage-reporter=text --coverage-reporter=lcov && bun scripts/coverage-gate.ts",
