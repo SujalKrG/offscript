@@ -131,7 +131,14 @@ describe("heuristic ledger", () => {
   });
 
   test("the offline ledger reads the newer constraint wordings too, not only the ones that start with a negation", () => {
-    for (const t of ["src/auth.ts is off limits", "Hands off src/auth.ts.", "src/db/schema.ts is read-only", "src/auth.ts is frozen until the audit is done"]) {
+    for (const t of [
+      "src/auth.ts is off limits",
+      "Hands off src/auth.ts.",
+      "src/db/schema.ts is read-only",
+      "src/auth.ts is frozen until the audit is done",
+      "The auth module is off limits.",
+      "Please hands off the billing folder",
+    ]) {
       expect([t, heuristicLedger(fake([t])).intents[0]?.kind]).toEqual([t, "constraint"]);
     }
     // near misses stay tasks: a request to build something read-only, and a task whose later sentence is a constraint
@@ -139,6 +146,11 @@ describe("heuristic ledger", () => {
       "Make the endpoint read-only",
       "Freeze the dependency versions in package.json",
       "Add a retry limit to src/tariff.ts. src/auth.ts is off limits.",
+      // a task that carries a constraint inside the same sentence is still one task: it must be judged on the work asked for
+      "Add a currency symbol to src/invoice.ts without changing src/auth/cookie.ts.",
+      "Update the docs but leave src/auth.ts alone.",
+      "Refactor the cart total, src/auth.ts is off limits.",
+      "Fix the login bug in src/login.ts and keep src/db/schema.ts read-only.",
     ]) {
       expect([t, heuristicLedger(fake([t])).intents[0]?.kind]).toEqual([t, "task"]);
     }

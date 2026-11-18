@@ -163,6 +163,10 @@ export function cachedIntentLedger(session: Session, repo: string, timeoutMs?: n
 const FOLLOW_UP_RE =
   /^(?:(?:yes|yep|yeah|yup|ok|okay|sure|please|go ahead|go on|continue|proceed|do it|sounds good|looks good|lgtm|thanks|thank you|thx|great|nice|perfect|next|keep going|try again|retry|that works|correct|right|exactly)(?:[\s,]+|$))+$/;
 const CONSTRAINT_RE = /^(?:please\s+)?(?:don'?t|do not|never|no new|without|avoid|stay away|leave\b)/i;
+// One kind per prompt, so a sentence counts as a constraint only when it is mainly one: it opens with the protected thing
+// ("src/auth.ts is off limits", "The auth module is read-only") or with "hands off". A task that carries a constraint
+// ("Add X to a.ts without changing b.ts") stays a task and is judged on the work asked for; the scope check still flags b.ts.
+const CONSTRAINT_LEAD_RE = /^(?:please\s+)?(?:hands off\b|(?:the\s+)?[\w./@-]+(?:\s+(?:module|folder|file|directory|dir|package))?\s+(?:is|are)\b)/i;
 
 export function isFollowUp(text: string): boolean {
   const t = text
@@ -192,7 +196,7 @@ export function heuristicLedger(session: Session): IntentLedger {
     intents.push({
       id: `I${intents.length + 1}`,
       text: first.length > 160 ? `${first.slice(0, 157)}...` : first,
-      kind: CONSTRAINT_RE.test(flat) || isFileConstraint(first) ? "constraint" : "task", // the first sentence only: one kind per prompt
+      kind: CONSTRAINT_RE.test(flat) || (CONSTRAINT_LEAD_RE.test(first) && isFileConstraint(first)) ? "constraint" : "task",
       sourcePrompts: [p.index],
       quote: flat.slice(0, 120),
       status: "active",
