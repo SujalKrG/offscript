@@ -10,7 +10,7 @@ import { buildTraceRecords, type TraceRecord, type TraceSummary } from "../src/t
 
 const made: string[] = [];
 process.on("exit", () => {
-  for (const d of made) rmSync(d, { recursive: true, force: true });
+  for (const d of made) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 export class World {
@@ -27,12 +27,11 @@ export class World {
   }
 
   git(...args: string[]): string {
-    const r = spawnSync(
-      "git",
-      ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", ...args],
-      { cwd: this.repo, encoding: "utf8" },
-    );
-    if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
+    const argv = ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false", "-c", "core.safecrlf=false", ...args];
+    // A git that never ran (spawn error, killed by a signal) has no exit status and no stderr: retry that, never a real git failure.
+    let r = spawnSync("git", argv, { cwd: this.repo, encoding: "utf8" });
+    for (let i = 0; i < 3 && r.status === null; i++) r = spawnSync("git", argv, { cwd: this.repo, encoding: "utf8" });
+    if (r.status !== 0) throw new Error(`git ${args.join(" ")}: status ${r.status} signal ${r.signal} ${r.error?.message ?? ""} ${r.stderr}`);
     return r.stdout;
   }
 
@@ -140,6 +139,29 @@ export class SessionBuilder {
       { filePath, structuredPatch: [{ oldStart: 1, oldLines: removed.length, newStart: 1, newLines: added.length, lines }] },
       model,
     );
+  }
+
+  /** An assistant text reply (the closing reply when it is the last one after a prompt). */
+  say(text: string): this {
+    this.recs.push({ ...this.common(), type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+    return this;
+  }
+
+  /** A Bash call and its result, ordered in time with the edits. A failed run is a tool_result with is_error. */
+  run(command: string, o: { failed?: boolean; output?: string } = {}): this {
+    const id = `tool-${this.id}-${++this.toolN}`;
+    this.recs.push({
+      ...this.common(),
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "tool_use", id, name: "Bash", input: { command } }] },
+    });
+    this.recs.push({
+      ...this.common(),
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: o.output ?? "ok", is_error: o.failed === true }] },
+      toolUseResult: { stdout: o.output ?? "", stderr: "" },
+    });
+    return this;
   }
 
   private tool(name: string, input: unknown, result: unknown, model?: string): this {

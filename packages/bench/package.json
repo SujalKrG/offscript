@@ -1,0 +1,8 @@
+{
+  "name": "@offscript/bench",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Drift Bench: seeded synthetic cases with exact expected findings, scored against the real review pipeline."
+}
