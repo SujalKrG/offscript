@@ -132,6 +132,27 @@ describe("history and reported speech are not claims about this turn", () => {
   });
 });
 
+describe("claims that need their own pattern", () => {
+  test("a numbered PR status claim is a pr claim, while a PR number in a historical sentence still is not", () => {
+    for (const s of ["PR #42 is up.", "The pull request #42 is open.", "Pull request #19 is created.", "PR 42 is open."]) {
+      expect([s, kinds(s)]).toEqual([s, ["pr:unsupported"]]);
+      expect([s, kinds(s, [{ cmd: "gh pr create --fill" }])]).toEqual([s, ["pr:verified"]]);
+    }
+    for (const s of ["PR #134 replaced the shipped icons.", "On Oct 3, PR #134 is open again.", "See PR #42 for the background."]) {
+      expect([s, kinds(s)]).toEqual([s, []]);
+    }
+  });
+
+  test("'nothing left to do' on its own is a completion claim, and other uses of 'nothing' are still not claims", () => {
+    for (const s of ["Nothing left to do.", "Nothing else left to do.", "There is nothing left to do.", "Nothing remaining."]) {
+      expect([s, kinds(s).map((k) => k.split(":")[0])]).toEqual([s, ["everything"]]);
+    }
+    for (const s of ["Nothing is committed.", "Nothing was changed in the lockfile and I did not run the build."]) {
+      expect([s, kinds(s)]).toEqual([s, []]);
+    }
+  });
+});
+
 describe("make is a test runner", () => {
   test("make test, make tests and make check count; make in a path or another target does not", () => {
     for (const c of ["make test", "make tests", "make -j4 check", "cd api && make test", "FOO=1 make test"]) expect(TEST_COMMAND_RE.test(c)).toBe(true);
@@ -262,6 +283,42 @@ describe("what a constraint protects", () => {
       ).toEqual([AUTH]);
       expect(against([text], [[CART, [1]]], [AUTH, CART])).toEqual([]);
     }
+  });
+
+  test("a trailing 'X is off limits' clause protects only its own subject, not the file requested earlier in the sentence", () => {
+    for (const text of [
+      `Add a flag to ${CART}, but ${AUTH} is off limits.`,
+      `Add a flag to ${CART}; ${AUTH} is off limits.`,
+      `Add a flag to ${CART} and ${AUTH} is off limits.`,
+      `Add a flag to ${CART}, then ${AUTH} stays read-only.`,
+      `Add a flag to ${CART} while ${AUTH} remains frozen.`,
+    ]) {
+      expect([
+        text,
+        against(
+          [text],
+          [
+            [AUTH, [1]],
+            [CART, [1]],
+          ],
+          [AUTH, CART],
+        ),
+      ]).toEqual([text, [AUTH]]);
+      expect([text, against([text], [[CART, [1]]], [AUTH, CART])]).toEqual([text, []]);
+    }
+    // a coordinated subject protects every file it names
+    const both = `${AUTH} and src/billing/ledger.ts are off limits.`;
+    expect(
+      against(
+        [both],
+        [
+          [AUTH, [1]],
+          ["src/billing/ledger.ts", [1]],
+          [CART, [1]],
+        ],
+        [AUTH, CART],
+      ),
+    ).toEqual([AUTH, "src/billing/ledger.ts"]);
   });
 
   test("a later prompt that lifts the constraint ends it from that turn on", () => {

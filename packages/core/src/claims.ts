@@ -63,13 +63,16 @@ const CLAIM_PATTERNS: [ClaimKind, RegExp][] = [
     "only-touched",
     /\b(only (touched|changed|modified|edited)|didn'?t (touch|change|modify) anything else|no other (files|changes)|nothing else (was |has been |got )?(touched|changed|modified|edited))\b/i,
   ],
-  ["everything", /\b(everything|all (of )?(it|them|the (requested|asked)[^.]{0,20})|all (done|set|complete|finished)|fully (done|complete|implemented))\b/i],
+  [
+    "everything",
+    /\b(everything|all (of )?(it|them|the (requested|asked)[^.]{0,20})|all (done|set|complete|finished)|fully (done|complete|implemented))\b|\bnothing (?:else |more )?(?:is )?(?:left|remaining)(?: to \w+)?[\s.!*]*$/i,
+  ],
   ["fixed", /\b(fixed|resolved|implemented|is (now )?working|works now|now works|done)\b/i],
 ];
 
 /** Plans, conditions, questions, negations and advice are not claims: "I'll push", "once it's merged", "nothing is committed", "do one pass". */
 const NOT_A_CLAIM =
-  /\b(i'?ll|i will|i'?d|i would|let me|going to|next,? i|i can|i could|should i|shall i|would you|do you want|want me to|if you|if it|once|when it|after (it|we|you)|need(s)? to|still need|not yet|not (done|working|complete|finished)|still (open|broken|failing|missing)|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|didn'?t|did not|do not|don'?t|couldn'?t|can'?t|cannot|failed|failing|nothing(?! left to do)|no longer|not \w+ed|rather than|instead of|optional|until|unless|recommend|suggest|consider|make sure|should|would|could|might|plan|(?<!nothing left )to do|must|usually|typically|if and when|after the|before the|when the|someone|were merged|pending)\b|\?\s*$|^(also\s+)?(do|restore|revert|send|wait|run|try|make|get|push|merge|deploy|commit|add|use|keep|check|test|build|open|create|set|install|restart)\b(?!\s+(?:passes|passed|succeeds|succeeded|works|is|was|completes)\b)/i;
+  /\b(i'?ll|i will|i'?d|i would|let me|going to|next,? i|i can|i could|should i|shall i|would you|do you want|want me to|if you|if it|once|when it|after (it|we|you)|need(s)? to|still need|not yet|not (done|working|complete|finished)|still (open|broken|failing|missing)|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|didn'?t|did not|do not|don'?t|couldn'?t|can'?t|cannot|failed|failing|nothing(?! (?:else |more )?(?:is )?(?:left|remaining)\b)|no longer|not \w+ed|rather than|instead of|optional|until|unless|recommend|suggest|consider|make sure|should|would|could|might|plan|(?<!nothing (?:else |more )?left )to do|must|usually|typically|if and when|after the|before the|when the|someone|were merged|pending)\b|\?\s*$|^(also\s+)?(do|restore|revert|send|wait|run|try|make|get|push|merge|deploy|commit|add|use|keep|check|test|build|open|create|set|install|restart)\b(?!\s+(?:passes|passed|succeeds|succeeded|works|is|was|completes)\b)/i;
 
 /** Table rows and headings ("| # | Bug | Fixed in |", "Found and fixed:") describe structure, not something that happened. */
 const NOT_A_SENTENCE = /^\\?\||\|\s*[-:]{3,}|^#{1,6}\s|[:：]\s*\**\s*$/;
@@ -83,6 +86,8 @@ const HISTORY =
 
 /** The PR a verb of this turn created ("Created PR #42") is not a past reference: its number is dropped before the history check. */
 const PR_CREATED = /\b(opened|created|raised|filed)\s+(?:a |the |new )?(pr|pull request)\s*#\d+/gi;
+/** Same for a current status claim about a numbered PR: "PR #42 is up", "The pull request #42 is open". */
+const PR_STATUS = /\b(pr|pull request)\s*#\d+(?=\s+(?:is\s+)?(?:open|up|created)\b)/gi;
 
 /** Reported speech: the sentence quotes a document or a person ("the README says all tests pass"), not the agent's own claim. */
 const REPORTED =
@@ -141,7 +146,12 @@ export function checkClaims(session: Session, intents: Intent[], verdicts: Verdi
       if ((NOT_A_CLAIM.test(sentence) || NOT_A_CLAIM.test(body)) && !CLAIM_PATTERNS.find(([k]) => k === "only-touched")![1].test(sentence)) continue;
       for (const [kind, re] of CLAIM_PATTERNS) {
         if (!re.test(sentence)) continue;
-        if ((HISTORY.test(sentence.replace(PR_CREATED, "$1 $2")) || REPORTED.test(sentence)) && kind !== "fixed" && kind !== "everything") break;
+        if (
+          (HISTORY.test(sentence.replace(PR_CREATED, "$1 $2").replace(PR_STATUS, "$1")) || REPORTED.test(sentence)) &&
+          kind !== "fixed" &&
+          kind !== "everything"
+        )
+          break;
         const key = `${kind}|${sentence.toLowerCase()}`;
         if (seen.has(key)) continue;
         seen.add(key);

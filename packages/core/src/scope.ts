@@ -91,7 +91,16 @@ function constraintTarget(sentence: string): { target: string; rest: string } | 
   const b = BETWEEN_RE.exec(sentence);
   if (b) return { target: b[1] ?? b[2] ?? "", rest: `${sentence.slice(0, b.index)} ${sentence.slice(b.index + b[0].length)}` };
   const c = POST_RE.exec(sentence);
-  if (c) return { target: sentence.slice(0, c.index), rest: sentence.slice(c.index + c[0].length) };
+  if (c) {
+    // Only the clause the phrase belongs to is protected: "Add a flag to cart.ts, but auth.ts is off limits" protects auth.ts.
+    // "and" splits clauses only before a singular verb; "auth.ts and schema.ts are off limits" is one coordinated subject.
+    const singular = /^(?:is|stays?|remains?)\b/i.test(c[0]);
+    const boundary = singular ? /[,;]|\s(?:but|and|then|so|while|though|however)\s/gi : /[,;]|\s(?:but|then|so|while|though|however)\s/gi;
+    const before = sentence.slice(0, c.index);
+    let cut = 0;
+    for (const m of before.matchAll(boundary)) cut = m.index + m[0].length;
+    return { target: before.slice(cut), rest: `${before.slice(0, cut)} ${sentence.slice(c.index + c[0].length)}` };
+  }
   return null;
 }
 
